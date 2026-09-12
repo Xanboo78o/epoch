@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPOCH</title><link rel="stylesheet" href="style.css"></head><body>
+<canvas id="cv"></canvas>
+<div id="top">
+  <div class="pill"><b id="yearLbl">230 BC</b>
+    <input type="range" id="year" min="-3000" max="1945" step="5" value="-230"></div>
+  <div class="pill" id="hud">0 vs 0</div>
+</div>
+<div id="bottom">
+  <div id="tray"></div>
+  <div id="bar">
+    <button class="btn go" id="go">GO</button>
+    <button class="btn" id="reset">Reset</button>
+    <button class="btn" id="demo">Demo army</button>
+    <button class="btn t0" id="teamBtn">RED</button>
+    <button class="btn" id="holdBtn">Advance</button>
+    <span class="keys">click to place · right-drag pans · wheel zooms · <b>space</b> go · <b>tab</b> side · <b>g</b> hold</span>
+  </div>
+</div>
+<script type="module" src="js/main.js"></script></body></html>
