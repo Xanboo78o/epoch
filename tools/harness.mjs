@@ -9,10 +9,10 @@ if (mode === 'stand') {
     let worst = 0;
     for (let i = 0; i < 1200; i++) {
       s.update(DT);
-      const vx = u.p.head.x - u.p.hip.x, vy = u.p.head.y - u.p.hip.y, vz = u.p.head.z - u.p.hip.z;
+      const vx = u.p.head.x - u.p.base.x, vy = u.p.head.y - u.p.base.y, vz = u.p.head.z - u.p.base.z;
       if (i > 60) worst = Math.max(worst, Math.atan2(Math.hypot(vx, vz), vy));
     }
-    console.log(`${worst < 0.55 ? 'OK  ' : 'FELL'} ${spec.name.padEnd(14)} head ${u.p.head.y.toFixed(1).padStart(5)}  drift ${Math.hypot(u.p.hip.x, u.p.hip.z).toFixed(0).padStart(5)}  tilt ${(worst * 180 / Math.PI).toFixed(0)}deg`);
+    console.log(`${worst < 0.55 ? 'OK  ' : 'FELL'} ${spec.name.padEnd(14)} head ${u.p.head.y.toFixed(1).padStart(5)}  drift ${Math.hypot(u.p.base.x, u.p.base.z).toFixed(0).padStart(5)}  tilt ${(worst * 180 / Math.PI).toFixed(0)}deg`);
   }
 }
 if (mode === 'duel') {

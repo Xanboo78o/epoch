@@ -68,91 +68,59 @@ export const BY_ID = Object.fromEntries(ROSTER.map(u => [u.id, u]));
 // simply: invented on or before the year you travelled to.
 export function rosterFor(year) { return ROSTER.filter(u => u.era <= year); }
 
+// A soldier is FOUR points: a base on the ground, a chest, a head, and the tip
+// of whatever he is holding. He used to be eleven points with articulated arms
+// and legs, which cost about three times the physics and fourteen draw calls a
+// man to render detail you cannot see at any sane zoom. He still stands by
+// balancing, still gets launched, still topples over when he dies.
+//
+// Shields are no longer physics objects either — `soak` is applied to hits
+// that land on his front, and the shield is drawn as a plain box.
 export function buildUnit(world, spec, x, z, groundY, team, uid, yaw) {
   const s = spec.scale, m = spec.mass;
   const common = { unit: uid, team };
-  // facing and the axis across the shoulders
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
-  const rx = fz, rz = -fx;
-
-  const Y = {
-    foot: groundY, knee: groundY + 17 * s, hip: groundY + 34 * s,
-    chest: groundY + 56 * s, head: groundY + 72 * s,
-  };
-  const P = (side, fwd, y, o) =>
-    world.addPoint(x + rx * side + fx * fwd, y, z + rz * side + fz * fwd, o);
 
   const pt = {};
-  pt.head  = P(0, 0, Y.head,  { ...common, r: 9 * s, im: 1 / (1.1 * m), tag: 'head' });
-  pt.chest = P(0, 0, Y.chest, { ...common, r: 8 * s, im: 1 / (2.4 * m), tag: 'chest' });
-  pt.hip   = P(0, 0, Y.hip,   { ...common, r: 7 * s, im: 1 / (2.0 * m), tag: 'hip' });
+  pt.base  = world.addPoint(x, groundY + 9 * s, z,
+    { ...common, r: 9 * s, im: 1 / (1.2 * m), tag: 'base' });
+  pt.chest = world.addPoint(x, groundY + 40 * s, z,
+    { ...common, r: 11 * s, im: 1 / (2.6 * m), tag: 'chest' });
+  pt.head  = world.addPoint(x, groundY + 62 * s, z,
+    { ...common, r: 7 * s, im: 1 / (1.0 * m), tag: 'head' });
 
-  pt.elbowL = P(-9 * s, 1 * s, Y.chest - 12 * s, { ...common, r: 4 * s, im: 1 / (0.5 * m), tag: 'limb', solid: false });
-  pt.handL  = P(-10 * s, 6 * s, Y.chest - 24 * s, { ...common, r: 4.5 * s, im: 1 / (0.5 * m), tag: 'handL', solid: false });
-  pt.elbowR = P(9 * s, 1 * s, Y.chest - 12 * s, { ...common, r: 4 * s, im: 1 / (0.5 * m), tag: 'limb', solid: false });
-  pt.handR  = P(10 * s, 6 * s, Y.chest - 24 * s, { ...common, r: 4.5 * s, im: 1 / (0.5 * m), tag: 'handR', solid: false });
-
-  pt.kneeL = P(-5 * s, 0, Y.knee, { ...common, r: 4.5 * s, im: 1 / (0.7 * m), tag: 'limb', solid: false });
-  pt.footL = P(-7 * s, 0, Y.foot, { ...common, r: 5 * s, im: 1 / (0.8 * m), tag: 'foot', solid: false });
-  pt.kneeR = P(5 * s, 0, Y.knee, { ...common, r: 4.5 * s, im: 1 / (0.7 * m), tag: 'limb', solid: false });
-  pt.footR = P(7 * s, 0, Y.foot, { ...common, r: 5 * s, im: 1 / (0.8 * m), tag: 'foot', solid: false });
-
-  const S = (a, b, o) => world.addStick(pt[a], pt[b], o);
   const bones = [
-    S('head', 'chest'), S('chest', 'hip'),
-    S('chest', 'elbowL'), S('elbowL', 'handL'),
-    S('chest', 'elbowR'), S('elbowR', 'handR'),
-    S('hip', 'kneeL'), S('kneeL', 'footL'),
-    S('hip', 'kneeR'), S('kneeR', 'footR'),
-    S('head', 'hip', { stiff: 0.22 }),
-    S('chest', 'kneeL', { stiff: 0.08 }),
-    S('chest', 'kneeR', { stiff: 0.08 }),
-    S('elbowL', 'elbowR', { stiff: 0.10 }),      // keeps shoulders square
-    S('footL', 'footR', { stiff: 0.10, minOnly: true }),
+    world.addStick(pt.base, pt.chest),
+    world.addStick(pt.chest, pt.head),
+    world.addStick(pt.base, pt.head, { stiff: 0.35 }),
   ];
 
   const unit = {
     uid, spec, team, yaw,
-    p: pt, all: Object.values(pt), bones,
+    p: pt, all: [pt.base, pt.chest, pt.head], bones,
     hp: spec.hp, maxHp: spec.hp,
     alive: true, limp: 0,
     gait: Math.random() * Math.PI * 2,
     cd: Math.random() * 0.6, swingT: 0,
     target: null, retarget: Math.random() * 0.4,
     hitLock: new Map(), flash: 0,
-    weapon: null, shieldPts: null,
+    weapon: null,
+    soak: spec.shield ? spec.shield.soak : 0,
     hold: false, anchorX: x, anchorZ: z,
     lean: { x: 0, z: 0 },
-    apex: 0,
+    apex: 0, bob: 0,
   };
 
   const w = spec.weapon;
   if (w) {
     const tip = world.addPoint(
-      pt.handR.x + fx * w.len * s * 0.8, pt.handR.y + 10 * s, pt.handR.z + fz * w.len * s * 0.8,
+      pt.chest.x + fx * w.len * s * 0.85, pt.chest.y + 4 * s, pt.chest.z + fz * w.len * s * 0.85,
       { unit: uid, team, r: w.tipR * s, im: 1 / (w.tipMass * m), tag: 'tip', solid: false });
-    const hold = world.addStick(pt.handR, tip, { len: w.len * s });
-    const brace = world.addStick(pt.elbowR, tip, {
-      len: Math.hypot(tip.x - pt.elbowR.x, tip.y - pt.elbowR.y, tip.z - pt.elbowR.z),
-      stiff: 0.30,
-    });
+    const hold = world.addStick(pt.chest, tip, { len: w.len * s });
+    const brace = world.addStick(pt.head, tip, {
+      len: Math.hypot(tip.x - pt.head.x, tip.y - pt.head.y, tip.z - pt.head.z), stiff: 0.18 });
     unit.weapon = { tip, hold, brace, spec: w, len: w.len * s };
     unit.all.push(tip);
-  }
-
-  if (spec.shield) {
-    const sh = spec.shield;
-    const top = world.addPoint(pt.handL.x, pt.handL.y + sh.h * 0.5 * s, pt.handL.z,
-      { unit: uid, team, r: sh.w * s * 0.25, im: 1 / (sh.mass * m), tag: 'shield' });
-    const bot = world.addPoint(pt.handL.x, pt.handL.y - sh.h * 0.5 * s, pt.handL.z,
-      { unit: uid, team, r: sh.w * s * 0.25, im: 1 / (sh.mass * m), tag: 'shield' });
-    world.addStick(top, bot, { len: sh.h * s });
-    world.addStick(pt.handL, top, { len: sh.h * 0.5 * s });
-    world.addStick(pt.handL, bot, { len: sh.h * 0.5 * s });
-    world.addStick(pt.elbowL, top, {
-      len: Math.hypot(top.x - pt.elbowL.x, top.y - pt.elbowL.y, top.z - pt.elbowL.z), stiff: 0.4 });
-    unit.shieldPts = { top, bot, spec: sh };
-    unit.all.push(top, bot);
   }
 
   return unit;

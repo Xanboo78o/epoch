@@ -23,16 +23,18 @@ is a design rule, not a limitation — do not add yaw controls.
 
 ## How a soldier works
 
-There is no rig and no animation data anywhere. Every man is 11 verlet points
-and a set of distance constraints; what the solver does to him is what you see.
-He stands because of three things running every frame in `sim.js`:
+Four points: a base on the ground, a chest, a head, and the tip of whatever he
+is holding. No rig and no animation data — he balances, so what the solver does
+to him is what you see, and he topples when he dies.
 
-- a PD controller on the spine (keep the head over the hips)
-- knees that refuse to fold (they ride the hip->foot line)
-- feet that step under the centre of mass, and *ahead* of it when walking
+He was eleven points with articulated arms and legs. That cost roughly three
+times the physics and fourteen draw calls a man to render detail invisible at
+any sane zoom. Four points and five draws runs **400 men at 3.3ms a step**.
 
-All muscle gains are **accelerations, not forces**, so they are mass
-independent — a Knight's limbs move at the same speed as a Levy's.
+The muscle gains are **accelerations, not forces**, so they are mass
+independent — a Knight moves like a Levy, only slower because his spec says so.
+Shields are a damage rule (`soak`, applied to frontal hits) rather than physics
+objects.
 
 ## Gotchas paid for in blood
 
@@ -44,6 +46,9 @@ independent — a Knight's limbs move at the same speed as a Levy's.
 - A long spear swung on an arc sweeps clean over anyone inside its length.
   Spears `style: 'thrust'` and need `keepAway` so they give ground.
 - Ranged units must spread their volleys, or 30 bows all kill the same one man.
+- Patching JS with `python str.replace` fails SILENTLY when the needle has
+  drifted. It cost two debugging rounds here. Verify with grep, or use an edit
+  tool that errors on no-match.
 - Arrow drag is tiny on purpose: the ballistic solve assumes a vacuum, and
   0.002/step put longbow arrows 211px short.
 

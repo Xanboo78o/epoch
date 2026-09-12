@@ -16,16 +16,10 @@ const _c = new THREE.Color();
 
 // A soldier is drawn as capsules between his physics points. There is no rig
 // and no animation data — whatever the solver does to him is what you see.
-// Limbs only — the torso is a box, because a cylinder torso reads as a sausage.
-// Radii are sized against a 72-unit-tall man: upper arm ~2.6, thigh ~3.4.
-const BONES = [
-  ['chest', 'head', 2.6, 'skin'],                                  // neck
-  ['chest', 'elbowL', 2.7, 'cloth'], ['elbowL', 'handL', 2.3, 'skin'],
-  ['chest', 'elbowR', 2.9, 'cloth'], ['elbowR', 'handR', 2.5, 'skin'],
-  ['hip', 'kneeL', 3.4, 'kit'], ['kneeL', 'footL', 2.8, 'kit'],
-  ['hip', 'kneeR', 3.5, 'kit'], ['kneeR', 'footR', 2.9, 'kit'],
-];
-const MAX_BONES = BONES.length + 1;   // +1 for the weapon shaft
+// One man = a base counter, a body box, a head box, an optional shield, plus
+// the weapon shaft. Five draws instead of fourteen, and he reads better at the
+// zoom this game is actually played at.
+const MAX_BOXES = 4;
 
 export class Renderer {
   constructor(canvas, capacity = 400) {
@@ -59,18 +53,11 @@ export class Renderer {
     this.sun = sun;
 
     // --- instanced soldier parts ---
-    const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
+    const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 5, 1);
     boneGeo.computeVertexNormals();
-    this.bones = this.makeInstanced(boneGeo, capacity * MAX_BONES, 0.35, 0.1);
-
-    const headGeo = new THREE.SphereGeometry(1, 8, 6);
-    this.heads = this.makeInstanced(headGeo, capacity, 0.5, 0.05);
-
-    const shieldGeo = new THREE.BoxGeometry(1, 1, 1);
-    this.shields = this.makeInstanced(shieldGeo, capacity, 0.45, 0.15);
-
-    // torso + helmet + two boots, all boxes
-    this.boxes = this.makeInstanced(new THREE.BoxGeometry(1, 1, 1), capacity * 4, 0.55, 0.08);
+    this.bones = this.makeInstanced(boneGeo, capacity, 0.35, 0.1);     // weapon shafts
+    this.boxes = this.makeInstanced(new THREE.BoxGeometry(1, 1, 1), capacity * MAX_BOXES, 0.6, 0.05);
+    this.trees = this.makeInstanced(new THREE.ConeGeometry(1, 1, 5), 3000, 0.9, 0);
 
     const shotGeo = new THREE.CylinderGeometry(0.6, 0.6, 1, 4, 1);
     this.shots = this.makeInstanced(shotGeo, 900, 0.5, 0.05);
@@ -192,6 +179,34 @@ export class Renderer {
     this.scene.add(this.terrainMesh);
   }
 
+  // Scenery that belongs to the map rather than the battle: a tree on every
+  // woodland tile. Rebuilt only when the map version changes.
+  buildProps(terrain) {
+    if (this.propsV === terrain.version) return;
+    this.propsV = terrain.version;
+    let n = 0;
+    const cap = this.trees.instanceMatrix.count;
+    for (let j = 0; j < terrain.h && n < cap; j++) {
+      for (let i = 0; i < terrain.w && n < cap; i++) {
+        if (terrain.typeAt(i, j) !== 6) continue;          // woodland
+        const seed = ((i * 73856093) ^ (j * 19349663)) & 1023;
+        const x = terrain.wx(i) + ((seed & 15) - 7.5) * 2.4;
+        const z = terrain.wz(j) + (((seed >> 4) & 15) - 7.5) * 2.4;
+        const hgt = 70 + (seed & 31) * 2.2;
+        _b.set(x, terrain.heightAt(x, z) + hgt / 2, z);
+        _q.identity();
+        _s.set(26 + (seed & 7), hgt, 26 + (seed & 7));
+        _m.compose(_b, _q, _s);
+        this.trees.setMatrixAt(n, _m);
+        this.trees.setColorAt(n, _c.setHex(0x2f4a26).offsetHSL(0, 0, ((seed & 31) / 31 - 0.5) * 0.08));
+        n++;
+      }
+    }
+    this.trees.count = n;
+    this.trees.instanceMatrix.needsUpdate = true;
+    if (this.trees.instanceColor) this.trees.instanceColor.needsUpdate = true;
+  }
+
   // A box spanning a->b, rolled so its depth axis faces `yaw`. Needed because
   // a torso has a front and a back and a cylinder does not.
   boxBetween(mesh, idx, a, b, w, d, yaw, colour) {
@@ -235,72 +250,62 @@ export class Renderer {
 
   draw(sim) {
     this.buildTerrain(sim.terrain);
-    let bi = 0, hi = 0, si = 0, ti = 0, xi = 0;
+    this.buildProps(sim.terrain);
+    let bi = 0, ti = 0, xi = 0;
+    const maxB = this.boxes.instanceMatrix.count;
 
     for (const u of sim.units) {
       const p = u.p, sc = u.spec.scale, spec = u.spec;
       const team = TEAM[u.team];
-      const dim = u.alive ? 1 : 0.55;
-      const cols = {
-        cloth: this.blend(spec.cloth, team.main, 0.45),
-        skin: spec.skin,
-        kit: this.blend(spec.kit, team.main, 0.2),
-      };
-      if (u.flash > 0) { cols.skin = 0xff8d7a; }
+      if (xi + MAX_BOXES > maxB) break;
 
-      for (const [a, b, r, key] of BONES) {
-        if (bi >= this.bones.instanceMatrix.count) break;
-        const pa = p[a], pb = p[b];
-        let col = cols[key];
-        if (!u.alive) col = this.blend(col, 0x2a2118, 0.45);
-        this.bone(this.bones, bi++, pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, r * sc, col);
+      const cloth = u.alive ? this.blend(spec.cloth, team.main, 0.5)
+                            : this.blend(spec.cloth, 0x24201a, 0.55);
+      const skin = u.alive ? (u.flash > 0 ? 0xff8d7a : spec.skin)
+                           : this.blend(spec.skin, 0x24201a, 0.55);
+
+      // team counter on the ground — this is what makes a formation readable
+      // when you are zoomed out far enough to see the whole battlefield
+      if (u.alive) {
+        const gy = sim.terrain.heightAt(p.base.x, p.base.z);
+        _b.set(p.base.x, gy + 1.2, p.base.z);
+        _q.setFromAxisAngle(_up, u.yaw);
+        _s.set(24 * sc, 2.4, 24 * sc);
+        _m.compose(_b, _q, _s);
+        this.boxes.setMatrixAt(xi, _m);
+        this.boxes.setColorAt(xi, _c.setHex(team.trim));
+        xi++;
       }
+
+      // Body runs from the base most of the way to the head — the neck is body,
+      // not face — and the head is a cube on the last stretch.
+      const bob = u.bob || 0;
+      const nx2 = p.chest.x + (p.head.x - p.chest.x) * 0.55;
+      const ny2 = p.chest.y + (p.head.y - p.chest.y) * 0.55 + bob;
+      const nz2 = p.chest.z + (p.head.z - p.chest.z) * 0.55;
+      _a.set(p.base.x, p.base.y, p.base.z);
+      _b.set(nx2, ny2, nz2);
+      this.boxBetween(this.boxes, xi++, _a, _b, 17 * sc, 12 * sc, u.yaw, cloth);
+
+      _a.set(nx2, ny2, nz2);
+      _b.set(p.head.x, p.head.y + bob + 3 * sc, p.head.z);
+      this.boxBetween(this.boxes, xi++, _a, _b, 13 * sc, 13 * sc, u.yaw, skin);
+
+      // shield, drawn only — it is a damage rule now, not a physics object
+      if (u.soak) {
+        const fx = Math.sin(u.yaw), fz = Math.cos(u.yaw);
+        const cx2 = (p.base.x + p.chest.x) / 2, cz2 = (p.base.z + p.chest.z) / 2;
+        const cy2 = (p.base.y + p.chest.y) / 2 + bob;
+        _a.set(cx2 + fx * 9 * sc, cy2 - 13 * sc, cz2 + fz * 9 * sc);
+        _b.set(cx2 + fx * 9 * sc, cy2 + 13 * sc, cz2 + fz * 9 * sc);
+        this.boxBetween(this.boxes, xi++, _a, _b,
+                        22 * sc, 4 * sc, u.yaw, this.blend(spec.shield.color, team.main, 0.45));
+      }
+
       if (u.weapon && bi < this.bones.instanceMatrix.count) {
         const t = u.weapon.tip;
-        this.bone(this.bones, bi++, p.handR.x, p.handR.y, p.handR.z, t.x, t.y, t.z,
-                  2.4 * sc, spec.weapon.color);
-      }
-
-      // torso
-      if (xi < this.boxes.instanceMatrix.count - 3) {
-        const tc = u.alive ? cols.cloth : this.blend(cols.cloth, 0x2a2118, 0.45);
-        this.boxBetween(this.boxes, xi++, p.hip, p.chest, 17 * sc, 11 * sc, u.yaw, tc);
-        // helmet, sitting on the head and tipped with it
-        const hc = u.alive ? cols.kit : this.blend(cols.kit, 0x2a2118, 0.45);
-        _a.set(p.head.x - p.chest.x, p.head.y - p.chest.y, p.head.z - p.chest.z).normalize();
-        const hb = { x: p.head.x + _a.x * 5 * sc, y: p.head.y + _a.y * 5 * sc, z: p.head.z + _a.z * 5 * sc };
-        this.boxBetween(this.boxes, xi++, p.head, hb, 11.5 * sc, 11.5 * sc, u.yaw, hc);
-        // boots
-        const bc = u.alive ? this.blend(cols.kit, 0x2a2118, 0.4) : 0x2a2118;
-        for (const f of [p.footL, p.footR]) {
-          const ft = { x: f.x + Math.sin(u.yaw) * 6 * sc, y: f.y, z: f.z + Math.cos(u.yaw) * 6 * sc };
-          this.boxBetween(this.boxes, xi++, f, ft, 6.5 * sc, 4.5 * sc, u.yaw, bc);
-        }
-      }
-
-      if (hi < this.heads.instanceMatrix.count) {
-        _b.set(p.head.x, p.head.y, p.head.z);
-        _q.identity();
-        _s.setScalar(5.2 * sc);
-        _m.compose(_b, _q, _s);
-        this.heads.setMatrixAt(hi, _m);
-        this.heads.setColorAt(hi, _c.setHex(u.alive ? cols.skin : this.blend(cols.skin, 0x2a2118, 0.5)));
-        hi++;
-      }
-
-      if (u.shieldPts && si < this.shields.instanceMatrix.count) {
-        const sh = u.shieldPts, sp = sh.spec;
-        const mx = (sh.top.x + sh.bot.x) / 2, my = (sh.top.y + sh.bot.y) / 2, mz = (sh.top.z + sh.bot.z) / 2;
-        const dx = sh.top.x - sh.bot.x, dy = sh.top.y - sh.bot.y, dz = sh.top.z - sh.bot.z;
-        const len = Math.hypot(dx, dy, dz) || 1;
-        _a.set(dx / len, dy / len, dz / len);
-        _q.setFromUnitVectors(_up, _a);
-        _b.set(mx, my, mz);
-        _s.set(sp.w * sc, len, sp.t * sc);
-        _m.compose(_b, _q, _s);
-        this.shields.setMatrixAt(si, _m);
-        this.shields.setColorAt(si, _c.setHex(this.blend(sp.color, team.main, 0.5)));
-        si++;
+        this.bone(this.bones, bi++, p.chest.x, p.chest.y + bob, p.chest.z,
+                  t.x, t.y, t.z, 2.2 * sc, spec.weapon.color);
       }
     }
 
@@ -311,9 +316,8 @@ export class Renderer {
       this.bone(this.shots, ti++, tx, ty, tz, h.x, h.y, h.z, 1.6, 0x5a4630);
     }
 
-    this.bones.count = bi; this.heads.count = hi; this.shields.count = si;
-    this.shots.count = ti; this.boxes.count = xi;
-    for (const m of [this.bones, this.heads, this.shields, this.shots, this.boxes]) {
+    this.bones.count = bi; this.shots.count = ti; this.boxes.count = xi;
+    for (const m of [this.bones, this.shots, this.boxes]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

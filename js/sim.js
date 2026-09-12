@@ -44,7 +44,7 @@ export class Sim {
       const seen = new Set();
       for (const u of this.units) {
         if (!u.alive || u.team === team) continue;
-        const i = T.tx(u.p.hip.x), j = T.tz(u.p.hip.z);
+        const i = T.tx(u.p.base.x), j = T.tz(u.p.base.z);
         const k = j * T.w + i;
         if (seen.has(k)) continue;
         seen.add(k); goals.push([i, j]);
@@ -85,19 +85,19 @@ export class Sim {
   }
 
   retarget(u) {
-    const hx = u.p.hip.x, hz = u.p.hip.z;
+    const hx = u.p.chest.x, hz = u.p.chest.z;
     if (u.spec.brain === 'ranged') {
       // Volleys spread across the mass instead of all landing on one man.
       const pool = [];
       for (const o of this.units) {
         if (!o.alive || o.team === u.team) continue;
-        if (Math.hypot(o.p.hip.x - hx, o.p.hip.z - hz) < u.spec.reach) pool.push(o);
+        if (Math.hypot(o.p.chest.x - hx, o.p.chest.z - hz) < u.spec.reach) pool.push(o);
       }
       if (pool.length) {
         const a = pool[(Math.random() * pool.length) | 0];
         const b = pool[(Math.random() * pool.length) | 0];
-        const da = Math.hypot(a.p.hip.x - hx, a.p.hip.z - hz);
-        const db = Math.hypot(b.p.hip.x - hx, b.p.hip.z - hz);
+        const da = Math.hypot(a.p.chest.x - hx, a.p.chest.z - hz);
+        const db = Math.hypot(b.p.chest.x - hx, b.p.chest.z - hz);
         u.target = da < db ? a : b;
         return;
       }
@@ -105,7 +105,7 @@ export class Sim {
     let best = null, bestD = Infinity;
     for (const o of this.units) {
       if (!o.alive || o.team === u.team) continue;
-      const dx = o.p.hip.x - hx, dz = o.p.hip.z - hz;
+      const dx = o.p.chest.x - hx, dz = o.p.chest.z - hz;
       const d = dx * dx + dz * dz;
       if (d < bestD) { bestD = d; best = o; }
     }
@@ -129,208 +129,126 @@ export class Sim {
       u.retarget = 0.35 + Math.random() * 0.35;
     }
     const tgt = u.target;
-    const ground = TER.heightAt(p.hip.x, p.hip.z);
+    const ground = TER.heightAt(p.base.x, p.base.z);
 
-    // --- stay upright ---
-    // The 2D version tracked a signed spine angle. In 3D the same thing is the
-    // horizontal part of the hip->head vector: its length is sin(tilt) and its
-    // direction is which way he is falling.
-    const vx = p.head.x - p.hip.x, vy = p.head.y - p.hip.y, vz = p.head.z - p.hip.z;
+    // --- stand up ---
+    // Same inverted-pendulum controller as before, just on a shorter stack:
+    // the horizontal part of base->head is sin(tilt) in the falling direction.
+    const vx = p.head.x - p.base.x, vy = p.head.y - p.base.y, vz = p.head.z - p.base.z;
     const L = Math.max(1e-3, Math.hypot(vx, vy, vz));
     const lx = vx / L, lz = vz / L;
     const dlx = (lx - u.lean.x) / dt, dlz = (lz - u.lean.z) / dt;
     u.lean.x = lx; u.lean.z = lz;
-    const carry = u.weapon ? 1 + Math.min(1.4, (1 / u.weapon.tip.im) / (2.4 * spec.mass)) : 1;
-    const K = 15000 * s * carry, D = 420 * s * carry;
+    const carry = u.weapon ? 1 + Math.min(1.2, (1 / u.weapon.tip.im) / (2.6 * spec.mass)) : 1;
+    const K = 13000 * s * carry, D = 380 * s * carry;
     const tx = -lx * K - dlx * D, tz = -lz * K - dlz * D;
     A(p.head, tx, 0, tz);
-    const back = (1 / p.head.im) / (1 / p.hip.im);
-    A(p.hip, -tx * back, 0, -tz * back);
+    const back = (1 / p.head.im) / (1 / p.base.im);
+    A(p.base, -tx * back, 0, -tz * back);
 
-    // centre of mass in the ground plane
-    let cx = 0, cz = 0, cm = 0;
-    for (const q of u.all) {
-      if (q.dead || q.im === 0) continue;
-      const mq = 1 / q.im;
-      cx += q.x * mq; cz += q.z * mq; cm += mq;
-    }
-    cx = cm > 0 ? cx / cm : p.hip.x;
-    cz = cm > 0 ? cz / cm : p.hip.z;
-
-    // --- where does he want to be ---
+    // --- where to go ---
     let wantX = 0, wantZ = 0, dist = Infinity;
     if (tgt) {
-      const dx = tgt.p.hip.x - p.hip.x, dz = tgt.p.hip.z - p.hip.z;
+      const dx = tgt.p.chest.x - p.chest.x, dz = tgt.p.chest.z - p.chest.z;
       dist = Math.hypot(dx, dz) || 1e-3;
       const nx = dx / dist, nz = dz / dist;
       u.yaw = Math.atan2(nx, nz);
       if (spec.keepAway) {
-        // Works for a spearman as well as an archer: a 106-long spear is dead
-        // weight once someone is 14 away, so give ground and keep the point up.
         if (dist < spec.keepAway * 0.8) { wantX = -nx; wantZ = -nz; }
         else if (dist > spec.reach * 0.85) { wantX = nx; wantZ = nz; }
       } else if (dist > spec.reach * 0.72) { wantX = nx; wantZ = nz; }
 
-      // Beyond a couple of tiles, follow the flow field rather than the
-      // straight line to the enemy — otherwise an army walks into a wall and
-      // stays there. Close in, go straight at him.
       const F = this.flow[u.team];
       if ((wantX || wantZ) && F && F.ready && dist > 220) {
-        const d = F.dirAt(p.hip.x, p.hip.z, this._fd || (this._fd = { x: 0, z: 0 }));
+        const d = F.dirAt(p.base.x, p.base.z, this._fd || (this._fd = { x: 0, z: 0 }));
         if (d) { wantX = d.x; wantZ = d.z; }
       }
       if (u.hold) {
-        const ox = p.hip.x - u.anchorX, oz = p.hip.z - u.anchorZ;
+        const ox = p.base.x - u.anchorX, oz = p.base.z - u.anchorZ;
         const od = Math.hypot(ox, oz);
         if (od > 26 * s) { wantX = -ox / od; wantZ = -oz / od; }
         else { wantX = 0; wantZ = 0; }
       }
     }
-    // Never walk at a step you cannot climb. Try to slide along it instead.
+
+    // never walk at a step you cannot climb
     if ((wantX || wantZ) && TER.passable) {
-      const i0 = TER.tx(p.hip.x), j0 = TER.tz(p.hip.z);
-      const ni = TER.tx(p.hip.x + wantX * 60), nj = TER.tz(p.hip.z + wantZ * 60);
+      const i0 = TER.tx(p.base.x), j0 = TER.tz(p.base.z);
+      const ni = TER.tx(p.base.x + wantX * 60), nj = TER.tz(p.base.z + wantZ * 60);
       if ((ni !== i0 || nj !== j0) && !TER.passable(i0, j0, ni, nj)) {
         if (TER.passable(i0, j0, ni, j0)) wantZ = 0;
         else if (TER.passable(i0, j0, i0, nj)) wantX = 0;
         else { wantX = 0; wantZ = 0; }
       }
     }
+
     u.dist = dist;
     const moving = (wantX || wantZ) && spec.speed > 0;
-    const spd = spec.speed * (TER.speedAt ? TER.speedAt(p.hip.x, p.hip.z) : 1);
+    const spd = spec.speed * (TER.speedAt ? TER.speedAt(p.base.x, p.base.z) : 1);
+    u.moving = moving;
 
-    // --- legs ---
-    const gaitRate = Math.min(14, 9 * spd);
-    u.gait += dt * (moving ? gaitRate : 1.4);
-
-    const hipVel = (p.hip.y - p.hip.py) / dt;
-    A(p.hip, 0, ((ground + 34 * s) - p.hip.y) * 260 - hipVel * 7, 0);
+    // --- walk ---
+    // No leg cycle any more: hold the base at standing height and bob the
+    // chest. At the zoom this game is played at, a bob reads as a stride.
+    const baseVel = (p.base.y - p.base.py) / dt;
+    A(p.base, 0, ((ground + 9 * s) - p.base.y) * 300 - baseVel * 8, 0);
+    u.gait += dt * (moving ? 9 * spd : 1.2);
+    u.bob = moving ? Math.sin(u.gait) * 2.2 * s : 0;
 
     const targetVX = wantX * spd * WALK * s, targetVZ = wantZ * spd * WALK * s;
     const tv = Math.hypot(targetVX, targetVZ);
-    const amp = Math.max(2, Math.min(58 * s, tv / gaitRate * Math.PI));
-    // across-the-shoulders axis, so the stance stays square to the facing
-    const rx = Math.cos(u.yaw), rz = -Math.sin(u.yaw);
-    const lead = Math.min(STRIDE * s, tv * 0.11);
-    const feet = [p.footL, p.footR], knees = [p.kneeL, p.kneeR], side = [-7 * s, 7 * s];
-    const mvx = tv > 1e-3 ? targetVX / tv : 0, mvz = tv > 1e-3 ? targetVZ / tv : 0;
-    for (let i = 0; i < 2; i++) {
-      const ph = u.gait + i * Math.PI;
-      const lift = moving ? Math.max(0, Math.sin(ph)) * 15 * s : 0;
-      const sw = moving ? Math.cos(ph) * amp : 0;
-      const baseX = moving ? cx + mvx * lead : cx + (cx - p.hip.x) * 1.6;
-      const baseZ = moving ? cz + mvz * lead : cz + (cz - p.hip.z) * 1.6;
-      const fx = baseX + rx * side[i] + mvx * sw;
-      const fz = baseZ + rz * side[i] + mvz * sw;
-      const f = feet[i];
-      A(f, (fx - f.x) * 325, ((TER.heightAt(fx, fz) + lift) - f.y) * 325, (fz - f.z) * 325);
-      const k = knees[i];
-      A(k, ((p.hip.x + f.x) * 0.5 + Math.sin(u.yaw) * 5 * s - k.x) * 214,
-           ((p.hip.y + f.y) * 0.5 - k.y) * 214,
-           ((p.hip.z + f.z) * 0.5 + Math.cos(u.yaw) * 5 * s - k.z) * 214);
-    }
-
-    // Velocity control runs whether he is walking or standing. Standing is
-    // just a target velocity of zero — without it the knee-bend bias pushes
-    // him forward forever and an idle army wanders off the map.
     {
-      const cvx = (p.hip.x - p.hip.px) / dt, cvz = (p.hip.z - p.hip.pz) / dt;
-      const gain = moving ? 20 : 16;
-      A(p.hip, (targetVX - cvx) * gain, 0, (targetVZ - cvz) * gain);
-      // Anchor: while walking he keeps re-marking where he is, and the moment
-      // he stops he holds that spot. Damping velocity alone was not enough —
-      // a shield's off-centre weight is a constant push, so shield carriers
-      // crept a third of a body length a second while "standing still".
-      if (moving) {
-        if (!u.hold) { u.anchorX = p.hip.x; u.anchorZ = p.hip.z; }
-      } else {
-        A(p.hip, (u.anchorX - p.hip.x) * 1.6, 0, (u.anchorZ - p.hip.z) * 1.6);
-      }
-      A(p.chest, (targetVX - (p.chest.x - p.chest.px) / dt) * (moving ? 5 : 4), 0,
-                 (targetVZ - (p.chest.z - p.chest.pz) / dt) * (moving ? 5 : 4));
-    }
-    if (moving) {
-      // top-speed governor, only with a foot down
-      const gL = p.footL.y < TER.heightAt(p.footL.x, p.footL.z) + 14 * s;
-      const gR = p.footR.y < TER.heightAt(p.footR.x, p.footR.z) + 14 * s;
-      if (gL || gR) {
+      const cvx = (p.base.x - p.base.px) / dt, cvz = (p.base.z - p.base.pz) / dt;
+      const gain = moving ? 22 : 16;
+      A(p.base, (targetVX - cvx) * gain, 0, (targetVZ - cvz) * gain);
+      A(p.chest, (targetVX - (p.chest.x - p.chest.px) / dt) * 6, 0,
+                 (targetVZ - (p.chest.z - p.chest.pz) / dt) * 6);
+      if (moving) { if (!u.hold) { u.anchorX = p.base.x; u.anchorZ = p.base.z; } }
+      else A(p.base, (u.anchorX - p.base.x) * 1.8, 0, (u.anchorZ - p.base.z) * 1.8);
+
+      const grounded = p.base.y < ground + 18 * s;
+      if (grounded && moving) {
         const cap = tv + 20;
-        for (const q of [p.hip, p.chest, p.head]) {
+        for (const q of [p.base, p.chest, p.head]) {
           const qx = (q.x - q.px) / dt, qz = (q.z - q.pz) / dt;
-          const sp = Math.hypot(qx, qz);
-          if (sp > cap) A(q, -(qx / sp) * (sp - cap) * 45, 0, -(qz / sp) * (sp - cap) * 45);
+          const sp2 = Math.hypot(qx, qz);
+          if (sp2 > cap) A(q, -(qx / sp2) * (sp2 - cap) * 45, 0, -(qz / sp2) * (sp2 - cap) * 45);
         }
       }
     }
 
-    // --- arms and weapon ---
+    // --- weapon ---
     const w = u.weapon;
     const aim = tgt ? tgt.p.chest : null;
     const fwdX = Math.sin(u.yaw), fwdZ = Math.cos(u.yaw);
     if (w) {
       u.cd -= dt;
-      const melee = spec.brain === 'melee';
-      if (melee && tgt && dist < spec.reach * 1.15 && u.cd <= 0 && u.swingT <= 0) {
+      if (spec.brain === 'melee' && tgt && dist < spec.reach * 1.15 && u.cd <= 0 && u.swingT <= 0) {
         u.swingT = 0.42; u.cd = w.spec.rate; u.hitLock.clear();
       }
       if (u.swingT > 0) {
         u.swingT -= dt;
         const t = 1 - u.swingT / 0.42;
         const F = w.spec.swing * SWING_K * s;
-        if (w.spec.style === 'thrust' && aim) {
-          // A long spear swung on an arc sweeps clean over anyone who has
-          // closed inside its length — the Hoplite landed 0 of 21 swings.
-          // Draw back along the shaft, then drive straight down the line.
-          if (t < 0.4) {
-            AR(w.tip, -fwdX * F * 1.1, F * 0.15, -fwdZ * F * 1.1, p.chest, 0.35);
-            A(w.tip, 0, GRAVITY, 0);
-          } else {
-            const dx = aim.x - w.tip.x, dy = aim.y - w.tip.y, dz = aim.z - w.tip.z;
-            const d = Math.max(1, Math.hypot(dx, dy, dz));
-            AR(w.tip, (dx / d) * F * 2.4, (dy / d) * F * 2.4, (dz / d) * F * 2.4, p.chest, 0.35);
-            A(w.tip, 0, GRAVITY, 0);
-            A(p.handR, fwdX * F * 0.5, 0, fwdZ * F * 0.5);
-          }
-        } else if (t < 0.38) {
-          AR(w.tip, -fwdX * F * 0.5, F * 1.0, -fwdZ * F * 0.5, p.chest, 0.45);
+        const thrust = w.spec.style === 'thrust';
+        if (t < (thrust ? 0.4 : 0.38)) {
+          AR(w.tip, -fwdX * F * (thrust ? 1.1 : 0.5), F * (thrust ? 0.15 : 1.0),
+             -fwdZ * F * (thrust ? 1.1 : 0.5), p.chest, 0.4);
           A(w.tip, 0, GRAVITY, 0);
-          A(p.handR, -fwdX * F * 0.25, F * 0.3, -fwdZ * F * 0.25);
         } else if (aim) {
           const dx = aim.x - w.tip.x, dy = aim.y - w.tip.y, dz = aim.z - w.tip.z;
           const d = Math.max(1, Math.hypot(dx, dy, dz));
-          AR(w.tip, (dx / d) * F * 1.7, (dy / d) * F * 1.2 - F * 0.4, (dz / d) * F * 1.7, p.chest, 0.45);
+          const g = thrust ? 2.4 : 1.7;
+          AR(w.tip, (dx / d) * F * g, (dy / d) * F * g - (thrust ? 0 : F * 0.4),
+             (dz / d) * F * g, p.chest, 0.4);
           A(w.tip, 0, GRAVITY, 0);
-          A(p.handR, fwdX * F * 0.35, 0, fwdZ * F * 0.35);
         }
       } else {
-        // carried, pointed at whoever he is annoyed with
-        const txp = p.handR.x + fwdX * 30 * s, tzp = p.handR.z + fwdZ * 30 * s;
-        const typ = p.handR.y + 10 * s;
-        AR(w.tip, (txp - w.tip.x) * 14, (typ - w.tip.y) * 14, (tzp - w.tip.z) * 14, p.chest, 1);
+        const txp = p.chest.x + fwdX * 26 * s, tzp = p.chest.z + fwdZ * 26 * s;
+        AR(w.tip, (txp - w.tip.x) * 16, ((p.chest.y + 6 * s) - w.tip.y) * 16,
+           (tzp - w.tip.z) * 16, p.chest, 1);
         A(w.tip, 0, GRAVITY, 0);
-        AR(p.handR, (p.chest.x + fwdX * 10 * s + rx * 9 * s - p.handR.x) * 60,
-                    (p.chest.y - 16 * s - p.handR.y) * 60,
-                    (p.chest.z + fwdZ * 10 * s + rz * 9 * s - p.handR.z) * 60, p.chest, 1);
-        A(p.handR, 0, GRAVITY * 0.5, 0);
       }
-    }
-
-    if (u.shieldPts) {
-      const sx = p.chest.x + fwdX * 16 * s - rx * 11 * s;
-      const sz = p.chest.z + fwdZ * 16 * s - rz * 11 * s;
-      AR(u.shieldPts.top, (sx - u.shieldPts.top.x) * 10,
-         (p.chest.y + 12 * s - u.shieldPts.top.y) * 10,
-         (sz - u.shieldPts.top.z) * 10, p.chest, 1);
-      A(u.shieldPts.top, 0, GRAVITY, 0);
-      A(u.shieldPts.bot, 0, GRAVITY, 0);
-      AR(p.handL, (sx - p.handL.x) * 24, (p.chest.y - 10 * s - p.handL.y) * 24,
-                  (sz - p.handL.z) * 24, p.chest, 1);
-      A(p.handL, 0, GRAVITY, 0);
-    } else {
-      AR(p.handL, (p.chest.x - rx * 10 * s - p.handL.x) * 36,
-                  (p.chest.y - 22 * s - p.handL.y) * 36,
-                  (p.chest.z - rz * 10 * s - p.handL.z) * 36, p.chest, 1);
     }
 
     if (spec.brain === 'ranged' && tgt && u.cd <= 0 && dist < spec.reach) {
@@ -341,7 +259,7 @@ export class Sim {
 
   fire(u, tgt) {
     const w = u.weapon.spec, s = u.spec.scale, W = this.world;
-    const from = u.p.handR;
+    const from = u.p.chest;
     const dx = tgt.p.chest.x - from.x, dz = tgt.p.chest.z - from.z;
     const dy = tgt.p.chest.y - from.y;
     const flat = Math.hypot(dx, dz) || 1e-3;
@@ -429,7 +347,7 @@ export class Sim {
       });
       if (!hit) continue;
       let dmg = w.spec.dmg * Math.min(1.9, Math.max(0.35, sp / 900));
-      if (hitPt.tag === 'shield' && hit.shieldPts) dmg *= (1 - hit.shieldPts.spec.soak);
+      dmg *= 1 - this.shieldFactor(hit, tip.x - hit.p.chest.x, tip.z - hit.p.chest.z);
       if (hitPt.tag === 'head') dmg *= 1.35;
       u.hitLock.set(hit.uid, 0.45);
       const kn = (1 / Math.max(0.02, tip.im)) * sp * 0.00016;
@@ -470,7 +388,7 @@ export class Sim {
       });
       if (!hit) continue;
       let dmg = s.dmg * Math.min(1.7, Math.max(0.4, sp / (s.kind === 'gun' ? 3000 : 800)));
-      if (hitPt.tag === 'shield' && hit.shieldPts) dmg *= (1 - hit.shieldPts.spec.soak);
+      dmg *= 1 - this.shieldFactor(hit, -vx, -vz);
       if (hitPt.tag === 'head') dmg *= 1.4;
       const kn = (1 / Math.max(0.02, h.im)) * sp * 0.00022;
       const ux = vx / sp, uy = vy / sp, uz = vz / sp;
@@ -494,17 +412,23 @@ export class Sim {
     for (const u of this.units) {
       if (!u.alive) continue;
       const s = u.spec.scale, p = u.p;
-      const grounded = p.footL.y < T.heightAt(p.footL.x, p.footL.z) + 16 * s
-                    || p.footR.y < T.heightAt(p.footR.x, p.footR.z) + 16 * s
-                    || p.hip.y < T.heightAt(p.hip.x, p.hip.z) + 20 * s;
+      const grounded = p.base.y < T.heightAt(p.base.x, p.base.z) + 20 * s;
       const clear = p.chest.y - T.heightAt(p.chest.x, p.chest.z);
       if (!grounded) { if (clear > u.apex) u.apex = clear; }
       else if (u.apex) {
-        const drop = u.apex - 56 * s - FALL_SAFE;
+        const drop = u.apex - 40 * s - FALL_SAFE;
         if (drop > 0) this.hurt(u, drop * FALL_HURT, p.chest.x, p.chest.y, p.chest.z);
         u.apex = 0;
       }
     }
+  }
+
+  // A shield only helps against what it is pointed at.
+  shieldFactor(u, fromX, fromZ) {
+    if (!u.soak) return 0;
+    const d = Math.hypot(fromX, fromZ) || 1;
+    const dot = (fromX / d) * Math.sin(u.yaw) + (fromZ / d) * Math.cos(u.yaw);
+    return dot > 0.15 ? u.soak * Math.min(1, dot + 0.25) : 0;
   }
 
   byUid(uid) {

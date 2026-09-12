@@ -19,60 +19,85 @@ const app = {
 const $ = (id) => document.getElementById(id);
 
 function setGround() {
-  // ROME, 230 BC. Two districts, each with its own ground and its own build
-  // material: the city inside the walls is cobble and marble, the farmland
-  // outside is ploughed dirt, crops and timber fences. Every tile placed on
-  // purpose — nothing here is generated.
+  // ROME, 230 BC — hand-placed, tile by tile. Two districts with their own
+  // ground and their own building material: inside the walls it is cobble,
+  // plaster and marble; outside it is dirt, crop and timber.
   terrain.fill(MAT.grass, 0);
 
-  // --- farmland, south and west ---
-  terrain.stamp(16, 54, 13, 0, MAT.crop);
-  terrain.stamp(34, 58, 9, 0, MAT.crop);
-  terrain.stamp(12, 38, 7, 0, MAT.dirt);
-  for (let i = 4; i < 30; i += 6) terrain.line(i, 46, i, 63, 0.4, 0, MAT.dirt);   // furrow lanes
-  // timber fences around the fields, one level high so they only slow you
-  fence(3, 45, 29, 45); fence(3, 64, 29, 64); fence(3, 45, 3, 64); fence(29, 45, 29, 64);
+  // --- the river, west to east, with sand banks and one stone bridge ---
+  terrain.line(0, 47, 71, 50, 2.0, 0, MAT.water);
+  terrain.line(0, 45, 71, 48, 0.6, 0, MAT.sand);
+  terrain.line(0, 50, 71, 53, 0.6, 0, MAT.sand);
+  // The bridge: a short straight deck one level above the water, just long
+  // enough to span it, with the road running onto both ends.
+  terrain.line(40, 44, 41, 54, 1.1, 1, MAT.cobble);
+  terrain.line(40, 34, 40, 45, 1.1, 0, MAT.road);
+  terrain.line(41, 53, 41, 66, 1.1, 0, MAT.road);
 
-  // --- the river and its crossing ---
-  terrain.line(0, 40, 71, 43, 1.6, 0, MAT.water);
-  terrain.line(30, 39, 34, 45, 1.2, 0, MAT.road);        // the bridge road
-  terrain.line(31, 40, 33, 44, 0.9, 1, MAT.cobble);      // the bridge itself
+  // --- farmland, south of the river ---
+  terrain.stamp(15, 58, 11, 0, MAT.crop);
+  terrain.stamp(30, 63, 7, 0, MAT.crop);
+  for (let i = 6; i <= 24; i += 4) terrain.line(i, 49, i, 67, 0.4, 0, MAT.dirt);
+  fence(4, 48, 27, 48); fence(4, 68, 27, 68);
+  fence(4, 48, 4, 68); fence(27, 48, 27, 68);
+  building(10, 53, 5, 4, 2, MAT.plaster);                // the farmhouse
+  terrain.stamp(10, 53, 4, 0, MAT.dirt);
+  building(10, 53, 5, 4, 2, MAT.plaster);
+  for (let i = 46; i <= 62; i += 4)                       // the orchard
+    for (let j = 58; j <= 66; j += 4) terrain.stamp(i, j, 1, 0, MAT.wood, false);
 
-  // --- the city, north east, inside its walls ---
-  terrain.stamp(46, 22, 15, 0, MAT.cobble);
-  wallRect(33, 9, 60, 35, 3, MAT.stone);
-  // gates: drop the wall to one level so troops can get in
-  gate(46, 9); gate(46, 35); gate(33, 22); gate(60, 22);
+  // --- the city, north of the river ---
+  terrain.stamp(40, 20, 19, 0, MAT.cobble);
+  wallRect(25, 6, 56, 34, 3, MAT.stone);
+  for (const [i, j] of [[25,6],[56,6],[25,34],[56,34]]) tower(i, j, 5);
+  gate(40, 6); gate(40, 34); gate(25, 20); gate(56, 20);
+  tower(38, 34, 5); tower(43, 34, 5);                     // gatehouse towers
+  tower(38, 6, 5); tower(43, 6, 5);
 
-  // insulae: blocks of housing, plaster with timber frames
-  for (let bx = 37; bx <= 55; bx += 7) {
-    for (let bz = 13; bz <= 31; bz += 7) {
-      if (Math.abs(bx - 46) < 4 && Math.abs(bz - 22) < 4) continue;   // leave the forum
+  // insulae in blocks, with streets between them
+  for (let bx = 29; bx <= 52; bx += 7) {
+    for (let bz = 10; bz <= 31; bz += 7) {
+      if (Math.hypot(bx - 40, bz - 20) < 7) continue;     // leave room for the forum
       building(bx, bz, 4, 4, 2, MAT.plaster);
     }
   }
-  // the forum: a marble platform with columns
-  terrain.stamp(46, 22, 4, 1, MAT.marble, false);
-  for (const [ox, oz] of [[-3,-3],[3,-3],[-3,3],[3,3],[0,-3],[0,3]]) {
-    terrain.set(46 + ox, 22 + oz, 5, MAT.marble);
+  // the forum: a marble platform ringed with columns
+  terrain.stamp(40, 20, 5, 1, MAT.marble, false);
+  for (let a2 = 0; a2 < 8; a2++) {
+    const i = Math.round(40 + Math.cos(a2 / 8 * 6.2832) * 4);
+    const j = Math.round(20 + Math.sin(a2 / 8 * 6.2832) * 4);
+    terrain.set(i, j, 6, MAT.marble);
   }
-  // roads out of every gate
-  terrain.line(46, 0, 46, 9, 1, 0, MAT.road);
-  terrain.line(46, 35, 44, 50, 1, 0, MAT.road);
-  terrain.line(0, 22, 33, 22, 1, 0, MAT.road);
+  // the amphitheatre, east side: a ring of stone seating around a sand floor
+  for (let r = 5; r <= 7; r++) ring(50, 26, r, 8 - r, MAT.stone);
+  terrain.stamp(50, 26, 4, 0, MAT.sand);
+
+  // roads out of the gates
+  terrain.line(40, 0, 40, 6, 1, 0, MAT.road);
+  terrain.line(0, 20, 25, 20, 1, 0, MAT.road);
+  terrain.line(56, 20, 71, 20, 1, 0, MAT.road);
+  terrain.line(40, 34, 40, 42, 1, 0, MAT.road);
 }
 
 function fence(x0, z0, x1, z1) { terrain.line(x0, z0, x1, z1, 0.4, 1, MAT.timber); }
-
 function wallRect(x0, z0, x1, z1, lv, mat) {
   terrain.line(x0, z0, x1, z0, 0.6, lv, mat);
   terrain.line(x0, z1, x1, z1, 0.6, lv, mat);
   terrain.line(x0, z0, x0, z1, 0.6, lv, mat);
   terrain.line(x1, z0, x1, z1, 0.6, lv, mat);
 }
+function tower(i, j, lv) {
+  for (let b = -1; b <= 1; b++) for (let a2 = -1; a2 <= 1; a2++) terrain.set(i + a2, j + b, lv, MAT.stone);
+}
 function gate(i, j) {
-  for (let dj = -1; dj <= 1; dj++)
-    for (let di = -1; di <= 1; di++) terrain.set(i + di, j + dj, 0, MAT.road);
+  for (let b = -1; b <= 1; b++) for (let a2 = -1; a2 <= 1; a2++) terrain.set(i + a2, j + b, 0, MAT.road);
+}
+function ring(cx, cz, r, lv, mat) {
+  for (let a2 = 0; a2 < 64; a2++) {
+    const i = Math.round(cx + Math.cos(a2 / 64 * 6.2832) * r);
+    const j = Math.round(cz + Math.sin(a2 / 64 * 6.2832) * r);
+    terrain.set(i, j, lv, mat);
+  }
 }
 // A hollow building: walls up, floor inside left low so troops can hold it.
 function building(cx, cz, w, h, lv, mat) {
@@ -92,8 +117,8 @@ function demo() {
   const pick = (i) => A[i % A.length].id;
   for (let r = 0; r < 4; r++) {
     for (let i = 0; i < 9; i++) {
-      add(pick(r), -700 - r * 90, -420 + i * 105, 0);
-      add(pick(r + 2), 700 + r * 90, -420 + i * 105, 1);
+      add(pick(r), terrain.wx(8 + r * 2), terrain.wz(14 + i * 2), 0);
+      add(pick(r + 2), terrain.wx(64 - r * 2), terrain.wz(14 + i * 2), 1);
     }
   }
 }
