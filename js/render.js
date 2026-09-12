@@ -189,13 +189,17 @@ export class Renderer {
       shader.uniforms.parallaxScale = { value: 0.006 };   // a hint, not a relief
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
-          varying vec3 vViewDirTS;
-          attribute vec3 aTan;`)
+          varying vec3 vViewDirTS;`)
         .replace('#include <fog_vertex>', `#include <fog_vertex>
           // Build a tangent basis from the face normal and the supplied
           // tangent, then take the view direction into tangent space.
-          vec3 N = normalize(normalMatrix * objectNormal);
-          vec3 T = normalize(normalMatrix * aTan);
+          // Every face in this world is axis-aligned, so the tangent follows
+          // from the normal exactly — no need to ship one per vertex.
+          vec3 nObj = normalize(objectNormal);
+          vec3 tObj = abs(nObj.y) > 0.5 ? vec3(1.0, 0.0, 0.0)
+                                        : normalize(cross(vec3(0.0, 1.0, 0.0), nObj));
+          vec3 N = normalize(normalMatrix * nObj);
+          vec3 T = normalize(normalMatrix * tObj);
           vec3 B = cross(N, T);
           vec3 vdir = -mvPosition.xyz;
           vViewDirTS = vec3(dot(vdir, T), dot(vdir, B), dot(vdir, N));`);
@@ -253,7 +257,7 @@ export class Renderer {
     const ci = ck % terrain.cw, cj = (ck / terrain.cw) | 0;
     const i0 = ci * CH, j0 = cj * CH;
     const i1 = Math.min(terrain.w, i0 + CH), j1 = Math.min(terrain.h, j0 + CH);
-    const pos = [], col = [], nrm = [], uvs = [], tan = [];
+    const pos = [], col = [], nrm = [], uvs = [];
     const c = new THREE.Color();
     const half = TILE / 2;
     const cols = this.atlas.cols, rows = this.atlas.rows;
@@ -274,7 +278,6 @@ export class Renderer {
                A[0], A[1], C[0], C[1], D[0], D[1]);
       for (let k = 0; k < 6; k++) {
         nrm.push(nx, ny, nz);
-        tan.push(tx2, ty2, tz2);
         col.push(colr.r, colr.g, colr.b);
       }
     };
@@ -331,7 +334,6 @@ export class Renderer {
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geo.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
     geo.computeBoundingSphere();
     m = new THREE.Mesh(geo, this.terrainMat);
     m.receiveShadow = true;

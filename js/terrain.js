@@ -52,7 +52,7 @@ export const TILE_SIDE = MATS.map(m => m.side);
 export const CLIMB = 2;
 
 export class Terrain {
-  constructor(w = 192, h = 192) {
+  constructor(w = 384, h = 384) {
     this.w = w; this.h = h;
     this.level = new Int16Array(w * h);
     this.type = new Uint8Array(w * h);

@@ -5,8 +5,10 @@ Minecraft, if it were a wargame. The world is a grid of **perfect cube blocks**
 houses and the farm out of them, each district with its own ground and its own
 building material. Then you put two armies on it and press GO.
 
-The map is 192x192 blocks and its mesh is **chunked** (32x32): painting a block
-rebuilds the nine chunks around it, not the whole world.
+The map is 384x384 blocks — about 96 soldier-heights across — and its mesh is
+**chunked** (32x32), so painting a block rebuilds the nine chunks around it
+rather than 147,000 tiles. Chunks are frustum-culled, so the size costs you
+nothing you cannot see.
 
 Heights are stored in **half-blocks** so slabs exist. The block stays the unit
 you build with — the block tool places two half-steps, the slab tool one — and
@@ -39,6 +41,14 @@ Detail therefore lives in `js/maps.js`: gabled roofs (slabs make the pitch
 possible — in whole blocks every building is the same ziggurat), kerbed
 streets, temple steps, colonnades, quays with steps down to the water,
 interval towers along the curtain wall.
+
+**Nothing about the layout is on a grid.** The wall circuit is a hand-picked
+irregular polygon. The streets are hand-picked polylines that wander. And
+`frontage()` walks a street and puts houses along it *turned to face it* —
+`rotCells` transforms each tile into the building's own frame, so a rotated
+house gets the stepped, jagged footprint a rotated building actually has when
+it is made of blocks. Every waypoint in there was chosen by hand; frontage is
+a stamp tool, not a generator.
 
 One thing the format cannot do: a heightmap gives every tile exactly one
 height, so there are no overhangs and no holes — no windows, no doorway

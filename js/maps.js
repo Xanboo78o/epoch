@@ -83,17 +83,28 @@ export function makeKit(T) {
       }
     },
 
+    // A wall circuit following hand-picked corners. Real cities are not
+    // rectangles; they are whatever shape the ground and the history left.
+    rampartPath(pts, h, m2, thick = 3) {
+      for (let s = 0; s < pts.length - 1; s++) {
+        kit.rampart(pts[s][0], pts[s][1], pts[s + 1][0], pts[s + 1][1], h, m2, thick);
+      }
+    },
+
     // A run of wall with a walkway and battlements.
     rampart(x0, z0, x1, z1, h, m, thick = 2) {
-      const steps = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0));
+      // Thickness is laid out along the line's normal, so a wall can run at
+      // any angle instead of only north-south or east-west.
+      const len = Math.hypot(x1 - x0, z1 - z0) || 1;
+      const nx = -(z1 - z0) / len, nz = (x1 - x0) / len;
+      const steps = Math.ceil(len) * 2;
       for (let s = 0; s <= steps; s++) {
         const t = s / steps;
-        const ci = Math.round(x0 + (x1 - x0) * t), cj = Math.round(z0 + (z1 - z0) * t);
-        for (let o = 0; o < thick; o++) {
-          const i = (z0 === z1) ? ci : ci + o;
-          const j = (z0 === z1) ? cj + o : cj;
-          const crenel = (o === 0 || o === thick - 1) && ((ci + cj) % 2 === 0);
-          set(i, j, h + (crenel ? 1 : 0), m);
+        const cx = x0 + (x1 - x0) * t, cz = z0 + (z1 - z0) * t;
+        for (let o = -(thick - 1) / 2; o <= (thick - 1) / 2; o += 0.5) {
+          const i = Math.round(cx + nx * o), j = Math.round(cz + nz * o);
+          const outer = Math.abs(o) >= (thick - 1) / 2 - 0.01;
+          set(i, j, h + (outer && ((i + j) % 2 === 0) ? 1 : 0), m);
         }
       }
     },
@@ -146,6 +157,87 @@ export function makeKit(T) {
       for (let s = 0; s <= n; s++) {
         const t = s / n;
         set(Math.round(x0 + (x1 - x0) * t), Math.round(z0 + (z1 - z0) * t), 1, m);
+      }
+    },
+
+    // --- rotated building blocks ------------------------------------------
+    // The grid is square but buildings need not be. Transforming each cell
+    // into the building's own frame gives a stepped, jagged footprint, which
+    // is exactly what a rotated building looks like when it is made of blocks.
+    rotCells(cx, cz, w, d, ang, fn) {
+      const c = Math.cos(-ang), s = Math.sin(-ang);
+      const rad = Math.ceil(Math.hypot(w, d) / 2) + 1;
+      for (let j = Math.floor(cz - rad); j <= cz + rad; j++) {
+        for (let i = Math.floor(cx - rad); i <= cx + rad; i++) {
+          const dx = i - cx, dz = j - cz;
+          const lx = dx * c - dz * s, lz = dx * s + dz * c;
+          if (Math.abs(lx) > w / 2 || Math.abs(lz) > d / 2) continue;
+          fn(i, j, lx, lz);
+        }
+      }
+    },
+    rotSlab(cx, cz, w, d, ang, lv, m2) {
+      kit.rotCells(cx, cz, w, d, ang, (i, j) => set(i, j, lv, m2));
+    },
+    // A gable roof on a rotated building: the ridge runs along the long axis,
+    // so the height only depends on how far you are across the short one.
+    rotGable(cx, cz, w, d, ang, baseLv, m2) {
+      const alongX = w >= d;
+      const span = alongX ? d : w;
+      kit.rotCells(cx, cz, w, d, ang, (i, j, lx, lz) => {
+        const off = (alongX ? (span / 2 - Math.abs(lz)) : (span / 2 - Math.abs(lx)));
+        set(i, j, baseLv + Math.max(0, Math.round(off)), m2);
+      });
+    },
+    // A house that faces its street rather than the world.
+    rotHouse(cx, cz, w, d, ang, storeys, wallMat, roofMat) {
+      const wallH = storeys * 4;   // 2 blocks a storey
+      kit.rotSlab(cx, cz, w + 2, d + 2, ang, 1, MAT.cobble);      // plinth
+      kit.rotSlab(cx, cz, w, d, ang, wallH, wallMat);
+      kit.rotGable(cx, cz, w + 2, d + 2, ang, wallH + 1, roofMat);
+    },
+
+    // --- streets ----------------------------------------------------------
+    // Hand-picked waypoints, not a grid. Returns the segment angles so the
+    // buildings can be turned to face whichever way the street is running.
+    street(pts, width, mat, lv = 0) {
+      const angs = [];
+      for (let s = 0; s < pts.length - 1; s++) {
+        const [x0, z0] = pts[s], [x1, z1] = pts[s + 1];
+        const ang = Math.atan2(z1 - z0, x1 - x0);
+        angs.push(ang);
+        const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0)) * 2;
+        for (let k = 0; k <= n; k++) {
+          const t = k / n;
+          const cx = x0 + (x1 - x0) * t, cz = z0 + (z1 - z0) * t;
+          for (let j = Math.floor(cz - width); j <= cz + width; j++)
+            for (let i = Math.floor(cx - width); i <= cx + width; i++)
+              if (Math.hypot(i - cx, j - cz) <= width) set(i, j, lv, mat);
+        }
+      }
+      return angs;
+    },
+
+    // Walk a street and drop buildings along one side, each turned to face it.
+    frontage(pts, side, opts) {
+      const { gap = 12, depth = 7, back = 7, storeys = 2,
+              wall = MAT.plaster, roofs = [MAT.brick], skip = () => false } = opts || {};
+      let carry = 0;
+      for (let s = 0; s < pts.length - 1; s++) {
+        const [x0, z0] = pts[s], [x1, z1] = pts[s + 1];
+        const len = Math.hypot(x1 - x0, z1 - z0);
+        const ang = Math.atan2(z1 - z0, x1 - x0);
+        const nx = -Math.sin(ang) * side, nz = Math.cos(ang) * side;
+        for (let t = carry; t < len; t += gap) {
+          const cx = Math.round(x0 + (x1 - x0) * (t / len) + nx * back);
+          const cz = Math.round(z0 + (z1 - z0) * (t / len) + nz * back);
+          if (skip(cx, cz)) continue;
+          const n = (cx * 7 + cz * 13) % 5;
+          // Width is well under the spacing, or neighbours fuse into one loaf.
+          kit.rotHouse(cx, cz, Math.max(5, gap - 6 + (n % 3)), depth + (n % 2), ang,
+                       storeys + (n % 2), wall, roofs[n % roofs.length]);
+        }
+        carry = (carry - len) % gap + gap;
       }
     },
 
@@ -235,141 +327,157 @@ export function makeKit(T) {
 }
 
 // ---------------------------------------------------------------- ROME ----
+// 384x384 blocks. Every waypoint below was picked by hand: the wall circuit is
+// an irregular polygon, the streets wander, and the houses are turned to face
+// whichever street they stand on rather than the world axes. Nothing here is
+// generated — `frontage` just walks a hand-drawn street and puts houses along
+// it, the way a level designer would with a stamp tool.
 export function buildRome(T) {
   const k = makeKit(T);
-  // Heights are written in BLOCKS; storage is half-blocks so slabs exist.
   const B = (n) => Math.round(n * 2);
-  const S = (n) => Math.round(n * 2 + 1);     // n blocks and a slab
   T.fill(MAT.grass, 0);
 
   // ============================ the river ==================================
-  k.slab(0, 116, 191, 127, 0, MAT.water);
-  k.slab(0, 113, 191, 115, 0, MAT.sand);
-  k.slab(0, 128, 191, 130, 0, MAT.sand);
+  const river = [[0, 268], [70, 262], [140, 272], [210, 266], [280, 276], [383, 270]];
+  k.street(river, 11, MAT.water);
+  k.street(river, 13.5, MAT.sand, 0);
+  k.street(river, 11, MAT.water);
 
-  // quays: a stone edge a block above the water, with steps down to it
-  k.slab(24, 112, 150, 113, B(1), MAT.stone);
-  k.slab(24, 130, 150, 131, B(1), MAT.stone);
-  for (let i = 34; i < 150; i += 22) {
-    k.steps(i, 113, i, 116, B(1), 0, MAT.stone);
-    k.slab(i - 3, 108, i + 3, 111, B(1), MAT.cobble);        // loading aprons
-  }
-  // warehouses along the north bank
-  for (let i = 30; i < 144; i += 17) {
-    k.insula(i + 6, 103, 12, 8, 2, MAT.brick, MAT.timber);
-  }
-
-  // ============================ the bridge =================================
-  k.slab(92, 110, 99, 133, B(1), MAT.cobble);
-  k.slab(92, 110, 92, 133, B(2), MAT.stone);       // parapets
-  k.slab(99, 110, 99, 133, B(2), MAT.stone);
-  for (const j of [118, 125]) {                    // piers standing in the water
-    k.slab(93, j, 98, j + 1, B(1), MAT.stone);
-  }
-  k.slab(93, 133, 98, 150, 0, MAT.road);
-
-  // ============================ the walls ==================================
-  k.slab(28, 14, 164, 104, 0, MAT.cobble);
-  k.rampart(28, 14, 164, 14, B(9), MAT.stone, 3);
-  k.rampart(28, 104, 164, 104, B(9), MAT.stone, 3);
-  k.rampart(28, 14, 28, 104, B(9), MAT.stone, 3);
-  k.rampart(164, 14, 164, 104, B(9), MAT.stone, 3);
-  for (const [i, j] of [[28,14],[164,14],[28,104],[164,104]]) k.tower(i, j, 4, B(13), MAT.stone);
-  // interval towers, the way a real curtain wall has them
-  for (let i = 50; i < 164; i += 26) { k.tower(i, 14, 3, B(11), MAT.stone); k.tower(i, 104, 3, B(11), MAT.stone); }
-  for (let j = 36; j < 104; j += 26) { k.tower(28, j, 3, B(11), MAT.stone); k.tower(164, j, 3, B(11), MAT.stone); }
-
-  // gates with real gatehouses: a passage, flanking towers, a step up inside
-  const gates = [[96, 14, 0, -1], [96, 104, 0, 1], [28, 59, -1, 0], [164, 59, 1, 0]];
-  for (const [gi, gj, dx, dz] of gates) {
-    k.slab(gi - 2, gj - 3, gi + 2, gj + 3, 0, MAT.road);
-    if (dz) { k.tower(gi - 6, gj, 3, B(14), MAT.stone); k.tower(gi + 6, gj, 3, B(14), MAT.stone); }
-    else { k.tower(gi, gj - 6, 3, B(14), MAT.stone); k.tower(gi, gj + 6, 3, B(14), MAT.stone); }
-    k.slab(gi - 2 + dx * 4, gj - 2 + dz * 4, gi + 2 + dx * 4, gj + 2 + dz * 4, 0, MAT.road);
-  }
-
-  // ============================ the streets ================================
-  // two great avenues, kerbed, crossing at the forum
-  k.slab(93, 15, 99, 103, 0, MAT.road);
-  k.slab(29, 56, 163, 62, 0, MAT.road);
-  k.kerb(92, 15, 92, 103, MAT.cobble); k.kerb(100, 15, 100, 103, MAT.cobble);
-  k.kerb(29, 55, 163, 55, MAT.cobble); k.kerb(29, 63, 163, 63, MAT.cobble);
-  // side streets
-  for (let i = 40; i < 164; i += 18) if (Math.abs(i - 96) > 8) k.slab(i, 16, i + 2, 102, 0, MAT.cobble);
-  for (let j = 24; j < 104; j += 16) if (Math.abs(j - 59) > 8) k.slab(29, j, 163, j + 1, 0, MAT.cobble);
-
-  // ============================ the forum ==================================
-  k.slab(76, 40, 120, 78, B(1), MAT.marble);
-  k.steps(76, 79, 120, 79, B(1), 0, MAT.marble);
-  k.colonnade(78, 42, 118, 42, B(7), MAT.marble, 3);
-  k.colonnade(78, 76, 118, 76, B(7), MAT.marble, 3);
-  k.colonnade(78, 42, 78, 76, B(7), MAT.marble, 3);
-  k.colonnade(118, 42, 118, 76, B(7), MAT.marble, 3);
-  k.statue(98, 59, B(4), MAT.marble);
-  k.well(84, 70); k.well(112, 70);
-
-  // the temple: podium, a broad flight of steps, deep porch, gable roof
-  k.slab(86, 44, 110, 64, B(3), MAT.marble);
-  k.steps(98, 65, 98, 69, B(3), B(1), MAT.marble);
-  k.colonnade(88, 46, 108, 46, B(9), MAT.marble, 2);
-  k.colonnade(88, 62, 108, 62, B(9), MAT.marble, 2);
-  k.colonnade(88, 46, 88, 62, B(9), MAT.marble, 2);
-  k.colonnade(108, 46, 108, 62, B(9), MAT.marble, 2);
-  k.gable(86, 44, 110, 64, B(10), MAT.brick);
-
-  // the basilica, west of the forum
-  k.slab(46, 40, 70, 56, B(8), MAT.plaster);
-  k.gable(45, 39, 71, 57, B(9), MAT.timber);
-  k.colonnade(46, 58, 70, 58, B(6), MAT.marble, 3);
-
-  // the curia, east
-  k.insula(140, 46, 18, 14, 3, MAT.plaster, MAT.brick);
-
-  // ============================ the amphitheatre ===========================
-  k.amphitheatre(136, 86, 19, 9, MAT.stone, MAT.sand);
-  k.steps(136, 106, 136, 102, 0, B(2), MAT.stone);
-
-  // ============================ the baths ==================================
-  k.slab(44, 78, 74, 96, B(6), MAT.brick);
-  k.gable(43, 77, 75, 97, B(7), MAT.plaster);
-  k.slab(50, 84, 68, 92, 0, MAT.water);       // the pool, open to the sky
-  k.slab(48, 82, 70, 83, B(1), MAT.marble);
-  k.slab(48, 93, 70, 94, B(1), MAT.marble);
-
-  // ============================ housing ====================================
-  // Varied sizes and materials, set along the side streets, with the odd
-  // courtyard block and a market square left open.
-  const roofs = [MAT.brick, MAT.thatch, MAT.timber];
-  let n = 0;
-  for (let i = 33; i < 160; i += 18) {
-    for (let j = 18; j < 100; j += 16) {
-      const cx = i + 7, cz = j + 6;
-      if (cx > 70 && cx < 126 && cz > 36 && cz < 82) continue;    // forum
-      if (Math.hypot((cx - 136) * 0.8, cz - 86) < 24) continue;   // amphitheatre
-      if (cx > 40 && cx < 78 && cz > 74 && cz < 100) continue;    // baths
-      if (cx > 40 && cx < 74 && cz > 36 && cz < 60) continue;     // basilica
-      if (cz > 98) continue;                                       // warehouses
-      n++;
-      if (n % 7 === 0) { k.slab(cx - 6, cz - 5, cx + 6, cz + 5, 0, MAT.cobble); k.well(cx, cz); continue; }
-      if (n % 4 === 0) k.courtyardBlock(cx, cz, 13, 11, MAT.plaster, roofs[n % 3]);
-      else k.insula(cx, cz, 9 + (n % 4), 7 + (n % 3), 2 + (n % 3), MAT.plaster, roofs[n % 3]);
+  // ============================ the wall circuit ===========================
+  const wall = [
+    [78, 74], [132, 52], [206, 46], [272, 60], [316, 98],
+    [330, 156], [320, 216], [274, 250], [200, 262], [128, 254],
+    [82, 222], [64, 156], [78, 74],
+  ];
+  k.slab(60, 40, 336, 264, 0, MAT.cobble);     // the ground the city sits on
+  k.rampartPath(wall, B(9), MAT.stone, 4);
+  for (const [i, j] of wall) k.tower(i, j, 4, B(13), MAT.stone);
+  // interval towers along every stretch
+  for (let s = 0; s < wall.length - 1; s++) {
+    const [x0, z0] = wall[s], [x1, z1] = wall[s + 1];
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    for (let t = 26; t < len - 12; t += 26) {
+      k.tower(Math.round(x0 + (x1 - x0) * t / len),
+              Math.round(z0 + (z1 - z0) * t / len), 3, B(11), MAT.stone);
     }
   }
 
-  // ============================ the aqueduct ===============================
-  k.aqueduct(191, 30, 165, 30, B(9), MAT.stone);
-  k.aqueduct(165, 30, 165, 44, B(9), MAT.stone);
+  // four gates, each cut through the circuit with a pair of towers
+  const gates = [[196, 47], [166, 258], [70, 150], [326, 150]];
+  for (const [gi, gj] of gates) {
+    k.slab(gi - 4, gj - 5, gi + 4, gj + 5, 0, MAT.road);
+    k.tower(gi - 8, gj, 3, B(15), MAT.stone);
+    k.tower(gi + 8, gj, 3, B(15), MAT.stone);
+  }
 
-  // ============================ outside the walls ==========================
-  k.field(14, 140, 58, 176, 'z');
-  k.field(68, 148, 104, 178, 'x');
-  k.fence(10, 136, 108, 136); k.fence(10, 180, 108, 180);
-  k.fence(10, 136, 10, 180); k.fence(108, 136, 108, 180);
-  k.courtyardBlock(32, 152, 17, 14, MAT.plaster, MAT.thatch);   // the villa
-  k.insula(28, 145, 11, 8, 2, MAT.plaster, MAT.thatch);
-  k.orchard(118, 138, 176, 178, 5);
-  k.orchard(6, 22, 24, 100, 4);                                  // woodland outside the west wall
-  k.slab(93, 150, 99, 180, 0, MAT.road);
+  // ============================ the streets ================================
+  // A loose network. These wander on purpose.
+  const via = {
+    spine:  [[196, 48], [190, 92], [200, 132], [194, 176], [188, 218], [166, 256]],
+    cross:  [[70, 150], [112, 142], [156, 152], [206, 144], [252, 154], [300, 146], [326, 150]],
+    north:  [[132, 60], [148, 96], [176, 112], [214, 104], [250, 84]],
+    east:   [[300, 110], [286, 152], [292, 196], [266, 232]],
+    west:   [[86, 96], [104, 134], [96, 178], [116, 214], [150, 236]],
+    market: [[214, 112], [244, 130], [258, 168], [238, 204], [200, 212]],
+    lane:   [[120, 176], [154, 190], [186, 200], [214, 190]],
+    // back lanes, to fill the quarters the main streets leave empty
+    alleyA: [[104, 96], [126, 120], [118, 152], [134, 178]],
+    alleyB: [[228, 66], [246, 96], [272, 118], [290, 150]],
+    alleyC: [[150, 60], [162, 88], [150, 116], [164, 140]],
+    alleyD: [[214, 214], [246, 224], [276, 214], [296, 186]],
+  };
+  k.street(via.spine, 3.2, MAT.road);
+  k.street(via.cross, 3.2, MAT.road);
+  for (const key of ['north', 'east', 'west', 'market', 'lane',
+                     'alleyA', 'alleyB', 'alleyC', 'alleyD']) k.street(via[key], 2.0, MAT.cobble);
+
+  // ============================ landmarks ==================================
+  // The forum sits in the crook of the two main streets.
+  const FORUM = [190, 152];
+  k.slab(158, 128, 232, 180, B(1), MAT.marble);
+  k.steps(158, 181, 232, 181, B(1), 0, MAT.marble);
+  k.colonnade(160, 130, 230, 130, B(7), MAT.marble, 4);
+  k.colonnade(160, 178, 230, 178, B(7), MAT.marble, 4);
+  k.colonnade(160, 130, 160, 178, B(7), MAT.marble, 4);
+  k.colonnade(230, 130, 230, 178, B(7), MAT.marble, 4);
+  k.statue(196, 154, B(5), MAT.marble);
+  k.well(168, 172); k.well(224, 172);
+
+  // the temple, on its podium, turned a few degrees off the street
+  k.rotSlab(196, 142, 26, 20, 0.12, B(3), MAT.marble);
+  k.steps(196, 154, 196, 160, B(3), B(1), MAT.marble);
+  k.rotSlab(196, 142, 22, 16, 0.12, B(9), MAT.marble);
+  k.rotGable(196, 142, 28, 22, 0.12, B(10), MAT.brick);
+
+  // basilica and curia flanking it
+  k.rotHouse(146, 118, 34, 18, -0.22, 3, MAT.plaster, MAT.timber);
+  k.rotHouse(244, 118, 28, 16, 0.18, 3, MAT.plaster, MAT.brick);
+
+  // the amphitheatre out east, and the circus along the south-west
+  k.amphitheatre(276, 196, 26, 13, MAT.stone, MAT.sand);
+  k.rotSlab(126, 208, 70, 26, 0.30, 0, MAT.sand);
+  k.rotSlab(126, 208, 74, 32, 0.30, B(3), MAT.stone);
+  k.rotSlab(126, 208, 70, 26, 0.30, 0, MAT.sand);
+
+  // the baths, north-west
+  k.rotHouse(112, 108, 32, 22, -0.35, 2, MAT.brick, MAT.plaster);
+  k.rotSlab(112, 108, 18, 10, -0.35, 0, MAT.water);
+
+  // ============================ housing ====================================
+  // Along every street, both sides, each house turned to face it.
+  const roofs = [MAT.brick, MAT.thatch, MAT.timber];
+  const keepClear = (x, z) => (
+    (Math.abs(x - FORUM[0]) < 48 && Math.abs(z - FORUM[1]) < 36) ||
+    Math.hypot((x - 276) * 0.8, z - 196) < 34 ||
+    Math.hypot(x - 126, z - 208) < 42 ||
+    Math.hypot(x - 112, z - 108) < 26 ||
+    Math.hypot(x - 196, z - 47) < 18 || Math.hypot(x - 166, z - 258) < 18 ||
+    Math.hypot(x - 70, z - 150) < 18 || Math.hypot(x - 326, z - 150) < 18
+  );
+  for (const [key, gap, storeys] of [
+    ['spine', 13, 3], ['cross', 13, 3], ['north', 11, 2], ['east', 11, 2],
+    ['west', 11, 2], ['market', 11, 2], ['lane', 10, 2],
+    ['alleyA', 10, 2], ['alleyB', 10, 2], ['alleyC', 10, 2], ['alleyD', 10, 2],
+  ]) {
+    for (const side of [1, -1]) {
+      k.frontage(via[key], side, {
+        gap, depth: 9, back: 8, storeys,
+        wall: MAT.plaster, roofs, skip: keepClear,
+      });
+    }
+  }
+
+  // a market square where two lanes meet, and wells in the quarters
+  k.slab(238, 160, 262, 182, 0, MAT.cobble);
+  k.well(250, 171);
+  for (const [i, j] of [[120, 120], [150, 216], [284, 128], [206, 230]]) k.well(i, j);
+
+  // ============================ the aqueduct ===============================
+  k.aqueduct(383, 118, 332, 118, B(9), MAT.stone);
+  k.aqueduct(332, 118, 306, 132, B(9), MAT.stone);
+
+  // ============================ river bank =================================
+  k.slab(120, 256, 250, 258, B(1), MAT.stone);          // the quay
+  for (let i = 132; i < 246; i += 26) k.steps(i, 258, i, 264, B(1), 0, MAT.stone);
+  k.frontage([[124, 250], [248, 252]], -1, {
+    gap: 17, depth: 10, back: 9, storeys: 2, wall: MAT.brick, roofs: [MAT.timber],
+  });
+  // the bridge
+  k.slab(178, 252, 186, 288, B(1), MAT.cobble);
+  k.slab(178, 252, 178, 288, B(2), MAT.stone);
+  k.slab(186, 252, 186, 288, B(2), MAT.stone);
+  k.slab(179, 288, 185, 330, 0, MAT.road);
+
+  // ============================ outside ====================================
+  k.field(40, 292, 140, 356, 'z');
+  k.field(210, 300, 320, 360, 'x');
+  k.fence(32, 286, 148, 286); k.fence(32, 360, 148, 360);
+  k.fence(32, 286, 32, 360); k.fence(148, 286, 148, 360);
+  k.rotHouse(70, 302, 22, 16, 0.25, 2, MAT.plaster, MAT.thatch);   // the villa
+  k.rotHouse(96, 316, 14, 10, -0.4, 1, MAT.plaster, MAT.thatch);
+  k.orchard(230, 286, 340, 300, 5);
+  k.orchard(12, 60, 54, 240, 4);                                    // woodland outside the west wall
+  k.orchard(300, 40, 370, 96, 5);
 
   T.markAllDirty();
   return { name: 'Rome, 230 BC' };
