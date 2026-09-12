@@ -9,14 +9,23 @@
   <div class="pill" id="hud">0 vs 0</div>
 </div>
 <div id="bottom">
+  <div id="palette"></div>
   <div id="tray"></div>
   <div id="bar">
+    <button class="btn mode" id="modeBtn">Building</button>
+    <span class="tools">
+      <button class="btn tool on" id="t_block">Blocks</button>
+      <button class="btn tool" id="t_paint">Ground</button>
+    </span>
+    <span class="pill sm"><button class="btn tiny" id="brushMinus">−</button>
+      <b id="brushLbl">3×3</b>
+      <button class="btn tiny" id="brushPlus">+</button></span>
     <button class="btn go" id="go">GO</button>
     <button class="btn" id="reset">Reset</button>
     <button class="btn" id="demo">Demo army</button>
     <button class="btn t0" id="teamBtn">RED</button>
     <button class="btn" id="holdBtn">Advance</button>
-    <span class="keys">click to place · right-drag pans · wheel zooms · <b>space</b> go · <b>tab</b> side · <b>g</b> hold</span>
+    <span class="keys"><b>b</b> build/armies · click places a block, <b>shift</b>+click removes · right-drag pans · wheel zooms · <b>[ ]</b> brush · <b>space</b> go</span>
   </div>
 </div>
 <script type="module" src="js/main.js"></script></body></html>

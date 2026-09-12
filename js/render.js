@@ -2,6 +2,7 @@
 // rotates; you pan and you zoom, that is all.
 
 import * as THREE from './vendor/three.module.min.js';
+import { TILE, LEVEL, TILE_COLOUR, TILE_SIDE, MATS } from './terrain.js';
 
 export const PITCH = 60 * Math.PI / 180;   // locked. Do not add yaw controls.
 export const TEAM = [
@@ -124,44 +125,71 @@ export class Renderer {
     return this.cam.position.clone().addScaledVector(ray, t);
   }
 
+  // The map is built as real tiles: a flat top quad per tile, plus a vertical
+  // wall wherever a neighbour sits lower. No smooth ground anywhere — the
+  // steps between levels are the whole look.
   buildTerrain(terrain) {
     if (this.terrainV === terrain.version && this.terrainMesh) return;
     this.terrainV = terrain.version;
-    const n = terrain.n, size = terrain.half * 2;
-    if (!this.terrainMesh) {
-      const geo = new THREE.PlaneGeometry(size, size, n - 1, n - 1);
-      geo.rotateX(-Math.PI / 2);
-      const mat = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, flatShading: true, vertexColors: true });
-      geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * n * 3), 3));
-      this.terrainMesh = new THREE.Mesh(geo, mat);
-      this.terrainMesh.receiveShadow = true;
-      this.scene.add(this.terrainMesh);
-    }
-    const pos = this.terrainMesh.geometry.attributes.position;
-    for (let j = 0; j < n; j++) {
-      for (let i = 0; i < n; i++) pos.setY(j * n + i, terrain.at(i, j));
-    }
-    pos.needsUpdate = true;
-    this.terrainMesh.geometry.computeVertexNormals();
+    const W = terrain.w, H = terrain.h;
+    const pos = [], col = [], nrm = [];
+    const c = new THREE.Color(), cw = new THREE.Color();
+    const half = TILE / 2;
 
-    // Paint by height and steepness so relief actually reads from a locked
-    // camera: grass low, pale dry grass high, bare earth on anything steep.
-    const col = this.terrainMesh.geometry.attributes.color;
-    const grass = new THREE.Color(0x7d9450), dry = new THREE.Color(0xb9b06a),
-          rock = new THREE.Color(0x8a7a5f), c = new THREE.Color();
-    const st = terrain.step;
-    for (let j = 0; j < n; j++) {
-      for (let i = 0; i < n; i++) {
-        const h = terrain.at(i, j);
-        const dhx = (terrain.at(i + 1, j) - terrain.at(i - 1, j)) / (2 * st);
-        const dhz = (terrain.at(i, j + 1) - terrain.at(i, j - 1)) / (2 * st);
-        const steep = Math.min(1, Math.hypot(dhx, dhz) * 1.5);
-        c.copy(grass).lerp(dry, Math.min(1, Math.max(0, h / 420)));
-        c.lerp(rock, steep);
-        col.setXYZ(j * n + i, c.r, c.g, c.b);
+    const quad = (ax, ay, az, bx, by, bz, cx2, cy2, cz2, dx, dy, dz, nx, ny, nz, colr) => {
+      pos.push(ax, ay, az, bx, by, bz, cx2, cy2, cz2,
+               ax, ay, az, cx2, cy2, cz2, dx, dy, dz);
+      for (let k = 0; k < 6; k++) { nrm.push(nx, ny, nz); col.push(colr.r, colr.g, colr.b); }
+    };
+
+    for (let j = 0; j < H; j++) {
+      for (let i = 0; i < W; i++) {
+        const lv = terrain.levelAt(i, j);
+        const ty = terrain.typeAt(i, j);
+        let y = lv * LEVEL;
+        const x = terrain.wx(i), z = terrain.wz(j);
+        c.setHex(TILE_COLOUR[ty]);
+        // a touch of per-tile variation so a big field is not one flat colour
+        const n = ((i * 73856093) ^ (j * 19349663)) & 255;
+        const shade = 0.94 + (n / 255) * 0.12;
+        c.multiplyScalar(shade);
+        if (MATS[ty].liquid) y -= LEVEL * 0.35;
+        quad(x - half, y, z - half, x - half, y, z + half,
+             x + half, y, z + half, x + half, y, z - half, 0, 1, 0, c);
+
+        // walls down to any lower neighbour, in the material's own side colour
+        cw.setHex(TILE_SIDE[ty]).multiplyScalar(shade);
+        const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        for (const [di, dj] of sides) {
+          const nl = terrain.inside(i + di, j + dj) ? terrain.levelAt(i + di, j + dj) : lv;
+          if (nl >= lv) continue;
+          const ny2 = nl * LEVEL;
+          const ex = di * half, ez = dj * half;
+          // Edge tangent = normal x up = (-dj, 0, di). Deriving it rather than
+          // picking the non-zero axis keeps the winding consistent for all
+          // four sides — the naive version left west and north walls inside
+          // out, so they were backface-culled and you saw straight through the
+          // hillside.
+          const tx = -dj * half, tz = di * half;
+          quad(x + ex - tx, y, z + ez - tz, x + ex + tx, y, z + ez + tz,
+               x + ex + tx, ny2, z + ez + tz, x + ex - tx, ny2, z + ez - tz,
+               di, 0, dj, cw);
+        }
       }
     }
-    col.needsUpdate = true;
+
+    if (this.terrainMesh) {
+      this.terrainMesh.geometry.dispose();
+      this.scene.remove(this.terrainMesh);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    this.terrainMesh = new THREE.Mesh(geo, mat);
+    this.terrainMesh.receiveShadow = true;
+    this.scene.add(this.terrainMesh);
   }
 
   // A box spanning a->b, rolled so its depth axis faces `yaw`. Needed because

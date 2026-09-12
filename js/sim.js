@@ -4,6 +4,7 @@
 
 import { World, GRAVITY, FLAT } from './physics.js';
 import { BY_ID, buildUnit } from './units.js';
+import { FlowField } from './flow.js';
 
 const HIT_SPEED = 230;
 const SWING_K = 3.6;
@@ -23,10 +24,34 @@ export class Sim {
     this.uid = 1;
     this.time = 0;
     this.running = false;
+    this.flow = [null, null];
+    this.flowT = 0;
   }
 
   get terrain() { return this.world.terrain; }
-  set terrain(t) { this.world.terrain = t || FLAT; }
+  set terrain(t) {
+    this.world.terrain = t || FLAT;
+    this.flow = [null, null];
+    if (t && t.w) { this.flow = [new FlowField(t), new FlowField(t)]; this.flowT = 0; }
+  }
+
+  // One field per side, aimed at wherever the other side currently is.
+  rebuildFlow() {
+    const T = this.world.terrain;
+    if (!this.flow[0] || !T.w) return;
+    for (const team of [0, 1]) {
+      const goals = [];
+      const seen = new Set();
+      for (const u of this.units) {
+        if (!u.alive || u.team === team) continue;
+        const i = T.tx(u.p.hip.x), j = T.tz(u.p.hip.z);
+        const k = j * T.w + i;
+        if (seen.has(k)) continue;
+        seen.add(k); goals.push([i, j]);
+      }
+      this.flow[team].build(goals);
+    }
+  }
 
   reset(keepTerrain = true) {
     const t = keepTerrain ? this.world.terrain : FLAT;
@@ -145,6 +170,15 @@ export class Sim {
         if (dist < spec.keepAway * 0.8) { wantX = -nx; wantZ = -nz; }
         else if (dist > spec.reach * 0.85) { wantX = nx; wantZ = nz; }
       } else if (dist > spec.reach * 0.72) { wantX = nx; wantZ = nz; }
+
+      // Beyond a couple of tiles, follow the flow field rather than the
+      // straight line to the enemy — otherwise an army walks into a wall and
+      // stays there. Close in, go straight at him.
+      const F = this.flow[u.team];
+      if ((wantX || wantZ) && F && F.ready && dist > 220) {
+        const d = F.dirAt(p.hip.x, p.hip.z, this._fd || (this._fd = { x: 0, z: 0 }));
+        if (d) { wantX = d.x; wantZ = d.z; }
+      }
       if (u.hold) {
         const ox = p.hip.x - u.anchorX, oz = p.hip.z - u.anchorZ;
         const od = Math.hypot(ox, oz);
@@ -152,9 +186,19 @@ export class Sim {
         else { wantX = 0; wantZ = 0; }
       }
     }
+    // Never walk at a step you cannot climb. Try to slide along it instead.
+    if ((wantX || wantZ) && TER.passable) {
+      const i0 = TER.tx(p.hip.x), j0 = TER.tz(p.hip.z);
+      const ni = TER.tx(p.hip.x + wantX * 60), nj = TER.tz(p.hip.z + wantZ * 60);
+      if ((ni !== i0 || nj !== j0) && !TER.passable(i0, j0, ni, nj)) {
+        if (TER.passable(i0, j0, ni, j0)) wantZ = 0;
+        else if (TER.passable(i0, j0, i0, nj)) wantX = 0;
+        else { wantX = 0; wantZ = 0; }
+      }
+    }
     u.dist = dist;
     const moving = (wantX || wantZ) && spec.speed > 0;
-    const spd = spec.speed;
+    const spd = spec.speed * (TER.speedAt ? TER.speedAt(p.hip.x, p.hip.z) : 1);
 
     // --- legs ---
     const gaitRate = Math.min(14, 9 * spd);
@@ -475,6 +519,8 @@ export class Sim {
       return;
     }
     this.time += dt;
+    this.flowT -= dt;
+    if (this.flowT <= 0) { this.flowT = 0.55; this.rebuildFlow(); }
     for (const u of this.units) {
       u.flash = Math.max(0, u.flash - dt);
       if (u.alive) this.drive(u, dt); else u.limp += dt;

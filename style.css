@@ -32,3 +32,21 @@ html,body{margin:0;height:100%;overflow:hidden;background:#9fc0d8;
 .btn.on{background:#7a5a2e;color:#fff;border-color:#5c4322}
 .keys{font-size:11px;opacity:.5}
 .keys b{background:rgba(200,185,152,.5);border-radius:4px;padding:1px 5px;font-weight:800}
+
+#palette{display:flex;gap:5px;padding:10px 12px 0;flex-wrap:wrap;max-width:760px}
+.swatch{width:30px;height:30px;border-radius:7px;border:2px solid rgba(60,48,30,.35);
+ cursor:pointer;box-shadow:0 2px 5px rgba(40,30,10,.22);padding:0}
+.swatch.build{border-radius:4px;border-color:rgba(30,24,14,.6)}
+.swatch.sel{outline:3px solid #5fa653;outline-offset:1px}
+.swatch:hover{transform:translateY(-2px)}
+.btn.mode{background:#3f6f8f;color:#fff;border-color:#2c556f}
+.tools{display:flex}
+.btn.tool{border-radius:0;margin-left:-1px}
+.tools .btn.tool:first-child{border-radius:11px 0 0 11px;margin-left:0}
+.tools .btn.tool:last-child{border-radius:0 11px 11px 0}
+.btn.tool.on{background:#3f6f8f;color:#fff;border-color:#2c556f}
+.btn.tiny{padding:2px 8px;font-size:15px;line-height:1;border-radius:7px}
+.pill.sm{padding:4px 8px;gap:6px;font-variant-numeric:tabular-nums}
+/* in build mode the unit tray gets out of the way, and vice versa */
+body.buildmode #tray{display:none}
+body:not(.buildmode) #palette{display:none}

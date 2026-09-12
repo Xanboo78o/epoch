@@ -1,7 +1,15 @@
 # EPOCH (working name — rename it)
 
-A 2.5D historical battle simulator. Pick a year, shape the ground, place two
-armies, press GO and watch it happen.
+Minecraft, if it were a wargame. The world is a **tile grid**: you build the
+castle, the city walls and the farm out of blocks, each district with its own
+ground and its own building material, then you put two armies on it and press
+GO.
+
+Everything about walls falls out of one number — a soldier can climb **one**
+level. Three levels of stone cannot be climbed, so a one-level gap is a gate,
+and a gate is a chokepoint. Armies path with a shared flow field per side, so
+they pour around walls and funnel through the gate instead of pressing their
+faces against the stonework.
 
 **Camera is locked at -60 degrees and never rotates.** Pan and zoom only. That
 is a design rule, not a limitation — do not add yaw controls.
@@ -9,7 +17,8 @@ is a design rule, not a limitation — do not add yaw controls.
     python3 -m http.server 8141
     # http://localhost:8141
 
-click places a unit · right-drag pans · wheel zooms · `space` go · `tab` side
+`b` switches building/armies · click places a block, `shift`+click removes one
+· `[` `]` brush size · right-drag pans · wheel zooms · `space` go · `tab` side
 · `g` hold-position
 
 ## How a soldier works
