@@ -18,187 +18,122 @@ function rng(seed) {
 }
 
 // --- per-material painters -------------------------------------------------
-// Each gets (ctx, height ctx, rand) and paints a TEXxTEX tile.
+// SMOOTH. The detail in this game comes from the architecture — from how the
+// blocks are arranged — not from texture noise. A busy stone texture fights
+// the block forms and turns a city into visual mush.
+//
+// So every material is a flat colour with, at most, a whisper of structure
+// (plank lines, marble veining, water ripples) kept at very low contrast. The
+// only thing the height map carries is a soft bevel at the tile edge, which is
+// what makes an individual block read as a block without any noise at all.
+
+const EDGE = 3;          // bevel width in texels
+
+function bevel(h) {
+  // A rounded plateau: flat in the middle, ramping down at the border. Run
+  // through the Sobel pass this becomes an edge that catches the light, which
+  // is the entire reason you can still see where one block ends.
+  const img = h.createImageData(TEX, TEX);
+  for (let y = 0; y < TEX; y++) {
+    for (let x2 = 0; x2 < TEX; x2++) {
+      const d = Math.min(x2, y, TEX - 1 - x2, TEX - 1 - y);
+      const t = Math.min(1, d / EDGE);
+      const v = 168 + Math.round(87 * (t * t * (3 - 2 * t)));
+      const i = (y * TEX + x2) * 4;
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v; img.data[i + 3] = 255;
+    }
+  }
+  h.putImageData(img, 0, 0);
+}
+
+// a barely-there mottle so a big flat field is not a single dead colour
+function breathe(a, r, base, amount) {
+  for (let i = 0; i < 60; i++) {
+    const x = r() * TEX, y = r() * TEX, s = 10 + r() * 26;
+    const g = a.createRadialGradient(x, y, 0, x, y, s);
+    const k = 1 + (r() - 0.5) * amount;
+    g.addColorStop(0, shade(base, k));
+    g.addColorStop(1, shade(base, 1) .replace('rgb(', 'rgba(').replace(')', ',0)'));
+    a.fillStyle = g;
+    a.fillRect(x - s, y - s, s * 2, s * 2);
+  }
+}
+
+function plain(base, amount = 0.06) {
+  return (a, h, r) => { fill(a, base); breathe(a, r, base, amount); bevel(h); };
+}
+
 const PAINT = {
-  grass(a, h, r) {
-    fill(a, '#6f8a46'); fill(h, '#808080');
-    for (let i = 0; i < 900; i++) {
-      const x = r() * TEX, y = r() * TEX, l = 1 + r() * 3;
-      const g = 60 + r() * 70;
-      a.fillStyle = `rgb(${70 + g * 0.35},${110 + g * 0.5},${50 + g * 0.25})`;
-      a.fillRect(x, y, 1, l);
-      h.fillStyle = `rgb(${120 + r() * 70 | 0},0,0)`;
-      h.fillRect(x, y, 1, l);
-    }
-  },
-  dirt(a, h, r) {
-    fill(a, '#8a6b44'); fill(h, '#7a7a7a');
-    for (let i = 0; i < 500; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 1 + r() * 3;
-      const v = r();
-      a.fillStyle = v > 0.8 ? '#6d563a' : v > 0.4 ? '#977busy' : '#7e6340';
-      a.fillStyle = v > 0.8 ? '#6d563a' : v > 0.4 ? '#977447' : '#7e6340';
-      a.fillRect(x, y, s, s);
-      h.fillStyle = `rgb(${100 + v * 90 | 0},0,0)`;
-      h.fillRect(x, y, s, s);
-    }
-  },
-  rock(a, h, r) {
-    fill(a, '#83807a'); fill(h, '#808080');
-    for (let i = 0; i < 90; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 4 + r() * 12;
-      const v = 0.75 + r() * 0.45;
-      a.fillStyle = shade('#83807a', v);
-      poly(a, x, y, s, 5 + (r() * 3 | 0), r);
-      h.fillStyle = `rgb(${90 + v * 90 | 0},0,0)`;
-      poly(h, x, y, s, 5 + (r() * 3 | 0), r);
-    }
-  },
+  grass: plain('#7a9b4e', 0.10),
+  dirt: plain('#93744a', 0.08),
+  rock: plain('#8b877f', 0.07),
+  sand: plain('#d4c68e', 0.06),
+  road: plain('#b5a079', 0.06),
+  stone: plain('#a49d91', 0.05),
+  cobble: plain('#918d86', 0.06),
+  rubble: plain('#857d72', 0.09),
+  plaster: plain('#ded3ba', 0.04),
+  brick: plain('#a05540', 0.06),
+  thatch: plain('#c3a44c', 0.07),
+
   water(a, h, r) {
-    fill(a, '#3f72a0'); fill(h, '#808080');
-    for (let y = 0; y < TEX; y++) {
-      for (let x = 0; x < TEX; x++) {
-        const w = Math.sin(x * 0.35 + Math.sin(y * 0.21) * 2.0) * 0.5 + 0.5;
-        if (w > 0.72) { a.fillStyle = `rgba(190,225,245,${(w - 0.72) * 1.6})`; a.fillRect(x, y, 1, 1); }
-        h.fillStyle = `rgb(${110 + w * 60 | 0},0,0)`; h.fillRect(x, y, 1, 1);
-      }
-    }
-  },
-  sand(a, h, r) {
-    fill(a, '#cfc08a'); fill(h, '#828282');
-    for (let i = 0; i < 1600; i++) {
-      const x = r() * TEX, y = r() * TEX, v = r();
-      a.fillStyle = shade('#cfc08a', 0.86 + v * 0.28);
-      a.fillRect(x, y, 1, 1);
-      h.fillStyle = `rgb(${118 + v * 26 | 0},0,0)`; h.fillRect(x, y, 1, 1);
-    }
-  },
-  crop(a, h, r) {
-    fill(a, '#9d8a34'); fill(h, '#6a6a6a');
-    for (let x = 2; x < TEX; x += 5) {
-      for (let i = 0; i < 26; i++) {
-        const y = r() * TEX, l = 4 + r() * 7, o = (r() - 0.5) * 2;
-        a.strokeStyle = shade('#c9b64a', 0.8 + r() * 0.5);
-        a.lineWidth = 1;
-        a.beginPath(); a.moveTo(x + o, y + l); a.lineTo(x + o * 2, y); a.stroke();
-        h.strokeStyle = `rgb(${170 + r() * 60 | 0},0,0)`;
-        h.beginPath(); h.moveTo(x + o, y + l); h.lineTo(x + o * 2, y); h.stroke();
-      }
-    }
-  },
-  wood(a, h, r) {   // woodland canopy
-    fill(a, '#33502a'); fill(h, '#707070');
-    for (let i = 0; i < 150; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 3 + r() * 8, v = 0.7 + r() * 0.6;
-      a.fillStyle = shade('#3e6031', v);
-      a.beginPath(); a.arc(x, y, s, 0, 6.2832); a.fill();
-      h.fillStyle = `rgb(${90 + v * 100 | 0},0,0)`;
-      h.beginPath(); h.arc(x, y, s, 0, 6.2832); h.fill();
-    }
-  },
-  road(a, h, r) {
-    fill(a, '#a89272'); fill(h, '#7e7e7e');
-    for (let i = 0; i < 420; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 1 + r() * 4, v = 0.8 + r() * 0.4;
-      a.fillStyle = shade('#a89272', v);
-      a.beginPath(); a.arc(x, y, s, 0, 6.2832); a.fill();
-      h.fillStyle = `rgb(${110 + v * 70 | 0},0,0)`;
-      h.beginPath(); h.arc(x, y, s, 0, 6.2832); h.fill();
-    }
-  },
-  stone(a, h, r) {   // ashlar: big dressed blocks with deep mortar
-    fill(a, '#9a9488'); fill(h, '#3a3a3a');
-    const rows = 4, rh = TEX / rows;
-    for (let ry = 0; ry < rows; ry++) {
-      const off = (ry % 2) * rh;
-      for (let x = -rh; x < TEX; x += rh * 2) {
-        const v = 0.86 + r() * 0.3;
-        rect(a, x + off + 1, ry * rh + 1, rh * 2 - 2, rh - 2, shade('#9a9488', v));
-        rect(h, x + off + 1, ry * rh + 1, rh * 2 - 2, rh - 2, `rgb(${190 + r() * 50 | 0},0,0)`);
-      }
-    }
-    speck(a, r, 260, '#8b8578');
-  },
-  brick(a, h, r) {
-    fill(a, '#8f4e39'); fill(h, '#3c3c3c');
-    const rows = 8, rh = TEX / rows;
-    for (let ry = 0; ry < rows; ry++) {
-      const off = (ry % 2) * rh;
-      for (let x = -rh; x < TEX; x += rh * 2) {
-        const v = 0.85 + r() * 0.35;
-        rect(a, x + off + 1, ry * rh + 1, rh * 2 - 2, rh - 2, shade('#a85a3f', v));
-        rect(h, x + off + 1, ry * rh + 1, rh * 2 - 2, rh - 2, `rgb(${195 + r() * 45 | 0},0,0)`);
-      }
-    }
-  },
-  marble(a, h, r) {
-    fill(a, '#e3ded2'); fill(h, '#9a9a9a');
-    for (let i = 0; i < 16; i++) {
-      a.strokeStyle = `rgba(150,148,140,${0.12 + r() * 0.25})`;
-      a.lineWidth = 0.6 + r() * 2.2;
+    fill(a, '#4a7fa8');
+    breathe(a, r, '#4a7fa8', 0.08);
+    // long, soft swells — structure, not noise
+    a.strokeStyle = 'rgba(210,235,250,0.14)';
+    a.lineWidth = 2.5;
+    for (let i = 0; i < 5; i++) {
       a.beginPath();
-      let x = r() * TEX, y = -4;
-      a.moveTo(x, y);
-      while (y < TEX + 4) { x += (r() - 0.5) * 11; y += 4 + r() * 5; a.lineTo(x, y); }
+      const y0 = r() * TEX;
+      for (let x2 = 0; x2 <= TEX; x2 += 4) {
+        const y = y0 + Math.sin(x2 * 0.09 + i) * 3;
+        x2 === 0 ? a.moveTo(x2, y) : a.lineTo(x2, y);
+      }
       a.stroke();
     }
-    // marble is polished: height stays almost flat
-    speck(h, r, 120, 'rgb(158,0,0)');
+    bevel(h);
   },
-  timber(a, h, r) {
-    fill(a, '#7d5f3c'); fill(h, '#6e6e6e');
-    for (let y = 0; y < TEX; y += 16) {
-      rect(a, 0, y + 1, TEX, 14, shade('#7d5f3c', 0.88 + r() * 0.3));
-      rect(h, 0, y + 1, TEX, 14, `rgb(${185 + r() * 45 | 0},0,0)`);
-      for (let i = 0; i < 40; i++) {      // grain
-        const gx = r() * TEX, gy = y + 2 + r() * 12;
-        a.fillStyle = `rgba(60,44,26,${0.1 + r() * 0.25})`;
-        a.fillRect(gx, gy, 3 + r() * 9, 1);
-      }
-    }
-  },
-  thatch(a, h, r) {
-    fill(a, '#b39442'); fill(h, '#707070');
-    for (let i = 0; i < 900; i++) {
-      const x = r() * TEX, y = r() * TEX, l = 5 + r() * 10, v = 0.75 + r() * 0.55;
-      a.strokeStyle = shade('#c9a94f', v);
-      a.lineWidth = 1;
-      a.beginPath(); a.moveTo(x, y); a.lineTo(x + (r() - 0.5) * 3, y + l); a.stroke();
-      h.strokeStyle = `rgb(${100 + v * 110 | 0},0,0)`;
-      h.beginPath(); h.moveTo(x, y); h.lineTo(x + (r() - 0.5) * 3, y + l); h.stroke();
-    }
-  },
-  plaster(a, h, r) {
-    fill(a, '#d8cdb4'); fill(h, '#8c8c8c');
-    speck(a, r, 1400, '#cec2a6');
-    for (let i = 0; i < 26; i++) {       // trowel marks
-      a.strokeStyle = `rgba(170,160,138,${0.06 + r() * 0.12})`;
-      a.lineWidth = 2 + r() * 5;
+
+  marble(a, h, r) {
+    fill(a, '#e7e3d8');
+    for (let i = 0; i < 5; i++) {
+      a.strokeStyle = `rgba(158,156,148,${0.07 + r() * 0.07})`;
+      a.lineWidth = 1 + r() * 2;
       a.beginPath();
-      const x = r() * TEX, y = r() * TEX;
-      a.moveTo(x, y); a.lineTo(x + (r() - 0.5) * 30, y + (r() - 0.5) * 30); a.stroke();
+      let x2 = r() * TEX, y = -4;
+      a.moveTo(x2, y);
+      while (y < TEX + 4) { x2 += (r() - 0.5) * 14; y += 7 + r() * 7; a.lineTo(x2, y); }
+      a.stroke();
     }
-    speck(h, r, 500, 'rgb(146,0,0)');
+    bevel(h);
   },
-  cobble(a, h, r) {
-    fill(a, '#6f6b64'); fill(h, '#4a4a4a');
-    for (let i = 0; i < 120; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 3 + r() * 6, v = 0.8 + r() * 0.5;
-      a.fillStyle = shade('#928d84', v);
-      poly(a, x, y, s, 6, r);
-      h.fillStyle = `rgb(${170 + v * 60 | 0},0,0)`;
-      poly(h, x, y, s, 6, r);
+
+  timber(a, h, r) {
+    fill(a, '#8a6a44');
+    breathe(a, r, '#8a6a44', 0.05);
+    a.strokeStyle = 'rgba(70,52,32,0.16)';
+    a.lineWidth = 1;
+    for (let y = 16; y < TEX; y += 16) {
+      a.beginPath(); a.moveTo(0, y); a.lineTo(TEX, y); a.stroke();
     }
+    bevel(h);
   },
-  rubble(a, h, r) {
-    fill(a, '#7b746a'); fill(h, '#5a5a5a');
-    for (let i = 0; i < 170; i++) {
-      const x = r() * TEX, y = r() * TEX, s = 2 + r() * 7, v = 0.72 + r() * 0.6;
-      a.fillStyle = shade('#867e72', v);
-      poly(a, x, y, s, 3 + (r() * 4 | 0), r);
-      h.fillStyle = `rgb(${120 + v * 100 | 0},0,0)`;
-      poly(h, x, y, s, 3 + (r() * 4 | 0), r);
+
+  crop(a, h, r) {
+    fill(a, '#b9a441');
+    breathe(a, r, '#b9a441', 0.07);
+    a.strokeStyle = 'rgba(126,108,40,0.16)';
+    a.lineWidth = 1.5;
+    for (let x2 = 6; x2 < TEX; x2 += 11) {
+      a.beginPath(); a.moveTo(x2, 0); a.lineTo(x2, TEX); a.stroke();
     }
+    bevel(h);
+  },
+
+  wood(a, h, r) {
+    fill(a, '#3d5c30');
+    breathe(a, r, '#3d5c30', 0.12);
+    bevel(h);
   },
 };
 
@@ -281,7 +216,7 @@ export function buildAtlas(MATS) {
     paint(tc, hc, r);
     ac.drawImage(tile, cx, cy);
     hh.drawImage(hgt, cx, cy);       // kept for the parallax pass
-    heightToNormal(hc, nc, cx, cy, m.bump !== undefined ? m.bump : 2.4);
+    heightToNormal(hc, nc, cx, cy, 1.5);   // bevel only, same for every material
     // ORM: red = AO (unused, 255), green = roughness, blue = metalness
     const rough = m.rough !== undefined ? m.rough : 0.92;
     const metal = m.metal !== undefined ? m.metal : 0.0;

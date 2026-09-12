@@ -13,19 +13,32 @@ you build with — the block tool places two half-steps, the slab tool one — a
 the climb limit is one full block, so a slab is always walkable and therefore
 useful as a stair.
 
+## The UI
+
+Three modes on a left rail — Build, Army, Battle — and one panel hanging off it
+that only ever shows the controls for the mode you are in. Pick what you are
+doing, pick what you are doing it with, then click the map. There is never a
+control on screen that belongs to a different job.
+
 ## Textures
 
-`js/textures.js` draws every material at load into one atlas: albedo, a height
-map, and a packed ORM tile (roughness in green, metalness in blue), the way an
-HD resource pack ships them. The normal map is a Sobel pass over the height, so
-a mortar line is a real groove rather than a painted stripe, and a **parallax
-shader** injected into MeshStandardMaterial marches the height map against the
-view direction — the geometry is a flat quad but cobbles and plank grooves have
-genuine depth. Nothing is downloaded; it is a few kilobytes of canvas code.
+Materials are **smooth on purpose**. The detail in this game comes from the
+architecture — from how the blocks are arranged — and a busy stone texture
+fights the block forms and turns a city into visual mush. So each material is a
+flat colour with at most a whisper of structure (plank lines, marble veining,
+water swells) kept at very low contrast.
 
-Each tile also picks one of four UV rotations from its position hash. Without
-that, a 64px cobble tile repeats identically across a street and reads as a
-grid instead of a surface.
+The one thing the height map carries is a soft bevel at the tile edge. Run
+through a Sobel pass into a normal map, that bevel is what makes an individual
+block read as a block with no noise at all. Roughness and metalness still vary
+per material — marble is polished, thatch is dead matte — packed into an ORM
+tile the way a resource pack ships them, with a procedural environment map so
+metalness has something to reflect.
+
+Detail therefore lives in `js/maps.js`: gabled roofs (slabs make the pitch
+possible — in whole blocks every building is the same ziggurat), kerbed
+streets, temple steps, colonnades, quays with steps down to the water,
+interval towers along the curtain wall.
 
 One thing the format cannot do: a heightmap gives every tile exactly one
 height, so there are no overhangs and no holes — no windows, no doorway

@@ -179,14 +179,14 @@ export class Renderer {
       metalnessMap: mk(at.orm, false),
       roughness: 1, metalness: 1,           // scaled by the maps
       vertexColors: true,
-      normalScale: new THREE.Vector2(1.1, 1.1),
+      normalScale: new THREE.Vector2(0.5, 0.5),
     });
     const heightTex = mk(at.height, false);
     mat.userData.height = heightTex;
 
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.heightMap = { value: heightTex };
-      shader.uniforms.parallaxScale = { value: 0.035 };
+      shader.uniforms.parallaxScale = { value: 0.006 };   // a hint, not a relief
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           varying vec3 vViewDirTS;

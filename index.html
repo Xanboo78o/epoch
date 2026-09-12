@@ -3,29 +3,63 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EPOCH</title><link rel="stylesheet" href="style.css"></head><body>
 <canvas id="cv"></canvas>
-<div id="top">
-  <div class="pill"><b id="yearLbl">230 BC</b>
-    <input type="range" id="year" min="-3000" max="1945" step="5" value="-230"></div>
-  <div class="pill" id="hud">0 vs 0</div>
+
+<!-- One decision at a time, left to right: what am I doing, what with, where. -->
+<div id="rail">
+  <button class="mode" id="m_build"><b>Build</b><span>place blocks</span></button>
+  <button class="mode" id="m_army"><b>Army</b><span>place troops</span></button>
+  <button class="mode" id="m_play"><b>Battle</b><span>run it</span></button>
 </div>
-<div id="bottom">
-  <div id="palette"></div>
-  <div id="tray"></div>
-  <div id="bar">
-    <button class="btn mode" id="modeBtn">Building</button>
-    <span class="tools">
-      <button class="btn tool on" id="t_block">Blocks</button>
-      <button class="btn tool" id="t_paint">Ground</button>
-    </span>
-    <span class="pill sm"><button class="btn tiny" id="brushMinus">−</button>
+
+<div id="panel">
+  <!-- BUILD -->
+  <section id="p_build">
+    <div class="row tools">
+      <button class="t" id="t_block" title="1">Block</button>
+      <button class="t" id="t_slab"  title="2">Slab</button>
+      <button class="t" id="t_paint" title="3">Paint</button>
+      <button class="t" id="t_erase" title="4">Dig</button>
+    </div>
+    <div class="row">
+      <label>Brush</label>
+      <input type="range" id="brush" min="0" max="6" step="1" value="1">
       <b id="brushLbl">3×3</b>
-      <button class="btn tiny" id="brushPlus">+</button></span>
-    <button class="btn go" id="go">GO</button>
-    <button class="btn" id="reset">Reset</button>
-    <button class="btn" id="demo">Demo army</button>
-    <button class="btn t0" id="teamBtn">RED</button>
-    <button class="btn" id="holdBtn">Advance</button>
-    <span class="keys"><b>b</b> build/armies · click places a block, <b>shift</b>+click removes · right-drag pans · wheel zooms · <b>[ ]</b> brush · <b>space</b> go</span>
-  </div>
+    </div>
+    <div class="swatches">
+      <h4>Ground</h4><div id="pal_ground"></div>
+      <h4>Building</h4><div id="pal_build"></div>
+    </div>
+    <p class="hint"><b>click</b> place · <b>shift</b>+click remove · <b>right-drag</b> pan · <b>wheel</b> zoom</p>
+  </section>
+
+  <!-- ARMY -->
+  <section id="p_army" hidden>
+    <div class="row">
+      <label>Year</label>
+      <input type="range" id="year" min="-3000" max="1945" step="5" value="-230">
+      <b id="yearLbl">230 BC</b>
+    </div>
+    <div class="row">
+      <button class="t wide" id="sideBtn">Red army</button>
+      <button class="t wide" id="stanceBtn">Advance</button>
+    </div>
+    <div id="tray"></div>
+    <p class="hint"><b>click</b> place a man · <b>tab</b> swap side · <b>g</b> hold ground</p>
+  </section>
+
+  <!-- BATTLE -->
+  <section id="p_play" hidden>
+    <button class="go" id="go">GO</button>
+    <div class="row">
+      <label>Speed</label>
+      <input type="range" id="speed" min="0" max="4" step="1" value="2">
+      <b id="speedLbl">1×</b>
+    </div>
+    <div class="row"><button class="t wide" id="reset">Reset to setup</button></div>
+    <div class="row"><button class="t wide" id="demo">Demo armies</button></div>
+    <p class="hint"><b>space</b> start and stop</p>
+  </section>
 </div>
+
+<div id="score"><b id="redN">0</b><span>vs</span><b id="blueN">0</b></div>
 <script type="module" src="js/main.js"></script></body></html>

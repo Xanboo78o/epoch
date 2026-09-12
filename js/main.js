@@ -1,3 +1,8 @@
+// EPOCH — glue. The UI has one shape: pick what you are doing (Build / Army /
+// Battle), pick what you are doing it with, then click the map. Everything
+// else hangs off that, so there is never a control on screen that belongs to
+// a different job.
+
 import { Sim } from './sim.js';
 import { Terrain, MATS, MAT, TILE } from './terrain.js';
 import { buildRome } from './maps.js';
@@ -5,35 +10,29 @@ import { Renderer, TEAM } from './render.js';
 import { ROSTER, BY_ID, rosterFor } from './units.js';
 
 const cv = document.getElementById('cv');
-const rend = new Renderer(cv, 500);
+const rend = new Renderer(cv, 600);
 const sim = new Sim();
-const terrain = new Terrain();   // 192x192 blocks
+const terrain = new Terrain();
 sim.terrain = terrain;
-
-const app = {
-  year: -230, picked: 'legionary', team: 0, hold: false, speed: 1, placed: [],
-  mode: 'build',          // 'build' | 'army'
-  mat: MAT.stone,
-  tool: 'block',          // 'block' (raise/lower) | 'paint' (material only)
-  brush: 1,               // radius in tiles
-};
 const $ = (id) => document.getElementById(id);
 
-function setGround() { buildRome(terrain); }
+const SPEEDS = [0.25, 0.5, 1, 2, 4];
+const app = {
+  mode: 'build',                 // build | army | battle
+  tool: 'block',                 // block | slab | paint | erase
+  mat: MAT.stone,
+  brush: 1,
+  year: -230,
+  picked: 'legionary',
+  team: 0,
+  hold: false,
+  speed: 1,
+  placed: [],
+  dirty: false,
+};
 
-function demo() {
-  sim.reset(true);
-  app.placed = [];
-  const A = rosterFor(app.year);
-  const pick = (i) => A[i % A.length].id;
-  // Two armies drawn up north and south of the city, outside the walls.
-  for (let r = 0; r < 4; r++) {
-    for (let i = 0; i < 10; i++) {
-      add(pick(r), terrain.wx(70 + i * 6), terrain.wz(8 - r * 3), 0);
-      add(pick(r + 2), terrain.wx(70 + i * 6), terrain.wz(116 + r * 3), 1);
-    }
-  }
-}
+// --- world ---------------------------------------------------------------
+function setGround() { buildRome(terrain); }
 
 function add(id, x, z, team, hold = false) {
   if (!BY_ID[id]) return;
@@ -45,20 +44,123 @@ function rebuild() {
   sim.reset(true);
   app.placed = [];
   for (const p of keep) add(p.id, p.x, p.z, p.team, p.hold);
+  sim.running = false;
+}
+function demo() {
+  sim.reset(true);
+  app.placed = [];
+  const A = rosterFor(app.year);
+  const pick = (i) => A[i % A.length].id;
+  for (let r = 0; r < 4; r++) {
+    for (let i = 0; i < 10; i++) {
+      add(pick(r), terrain.wx(64 + i * 7), terrain.wz(6 - r * 3), 0);
+      add(pick(r + 2), terrain.wx(64 + i * 7), terrain.wz(186 + r * 3), 1);
+    }
+  }
+  sim.running = false;
 }
 
-// --- tray -----------------------------------------------------------------
-function buildPalette() {
-  const pal = document.getElementById('palette');
-  pal.innerHTML = '';
-  for (let i = 0; i < MATS.length; i++) {
-    const mt = MATS[i];
-    const b = document.createElement('button');
-    b.className = 'swatch' + (app.mat === i ? ' sel' : '') + (mt.build ? ' build' : '');
-    b.style.background = '#' + mt.top.toString(16).padStart(6, '0');
-    b.title = mt.name + (mt.build ? ' (building material)' : ' (ground)');
-    b.onclick = () => { app.mat = i; buildPalette(); };
-    pal.appendChild(b);
+// --- editing ---------------------------------------------------------------
+// One click is one thing: a block is two half-steps, a slab is one, paint only
+// changes material, dig takes a block away.
+function paintTile(g, remove) {
+  const ci = terrain.tx(g.x), cj = terrain.tz(g.z);
+  const r = app.brush;
+  const dig = remove || app.tool === 'erase';
+  for (let j = cj - r; j <= cj + r; j++) {
+    for (let i = ci - r; i <= ci + r; i++) {
+      if (!terrain.inside(i, j)) continue;
+      if (Math.hypot(i - ci, j - cj) > r + 0.25) continue;
+      if (app.tool === 'paint') { terrain.set(i, j, undefined, app.mat); continue; }
+      const step = app.tool === 'slab' ? 1 : 2;
+      const lv = terrain.levelAt(i, j) + (dig ? -step : step);
+      terrain.set(i, j, Math.max(0, Math.min(60, lv)), dig ? undefined : app.mat);
+    }
+  }
+  app.dirty = true;
+}
+
+// --- input -----------------------------------------------------------------
+let drag = null;
+function groundAt(e) {
+  const r = cv.getBoundingClientRect();
+  const nx = ((e.clientX - r.left) / r.width) * 2 - 1;
+  const ny = -((e.clientY - r.top) / r.height) * 2 + 1;
+  let p = rend.screenToGround(nx, ny, 0);
+  if (!p) return null;
+  return rend.screenToGround(nx, ny, terrain.heightAt(p.x, p.z));
+}
+
+cv.addEventListener('pointerdown', (e) => {
+  cv.setPointerCapture(e.pointerId);
+  if (e.button !== 0) {
+    drag = { mode: 'pan', x: e.clientX, y: e.clientY, t: rend.target.clone() };
+    return;
+  }
+  const g = groundAt(e);
+  if (!g) return;
+  if (app.mode === 'build') { drag = { mode: 'build', rm: e.shiftKey }; paintTile(g, e.shiftKey); }
+  else if (app.mode === 'army') { drag = { mode: 'place' }; add(app.picked, g.x, g.z, app.team, app.hold); }
+  else drag = { mode: 'pan', x: e.clientX, y: e.clientY, t: rend.target.clone() };
+});
+cv.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (drag.mode === 'pan') {
+    const k = rend.dist / cv.clientHeight * 1.4;
+    rend.target.x = drag.t.x - (e.clientX - drag.x) * k;
+    rend.target.z = drag.t.z - (e.clientY - drag.y) * k / Math.sin(Math.PI / 3);
+  } else if (drag.mode === 'build') {
+    const g = groundAt(e); if (g) paintTile(g, drag.rm);
+  }
+});
+addEventListener('pointerup', () => {
+  if (drag && drag.mode === 'build' && app.dirty) { app.dirty = false; rebuild(); }
+  drag = null;
+});
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  rend.dist = Math.max(200, Math.min(7000, rend.dist * (e.deltaY < 0 ? 0.9 : 1 / 0.9)));
+}, { passive: false });
+
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); toggleRun(); return; }
+  if (k === 'b') setMode('build');
+  else if (k === 'a') setMode('army');
+  else if (k === 'p') setMode('battle');
+  else if (k === 'r') { rebuild(); sync(); }
+  else if (k === 'g') { app.hold = !app.hold; sync(); }
+  else if (k === 'tab') { e.preventDefault(); app.team = 1 - app.team; sync(); }
+  else if (k >= '1' && k <= '4' && app.mode === 'build') {
+    app.tool = ['block', 'slab', 'paint', 'erase'][+k - 1]; sync();
+  }
+});
+
+// --- UI --------------------------------------------------------------------
+function setMode(m) {
+  app.mode = m;
+  if (m === 'battle') { /* leave running state alone */ }
+  sync();
+}
+function toggleRun() {
+  sim.running = !sim.running;
+  if (sim.running) setMode('battle'); else sync();
+}
+
+function buildPalettes() {
+  for (const [host, want] of [[$('pal_ground'), false], [$('pal_build'), true]]) {
+    host.innerHTML = '';
+    MATS.forEach((m, i) => {
+      if (!!m.build !== want) return;
+      const b = document.createElement('button');
+      b.className = 'sw' + (want ? ' block' : '') + (app.mat === i ? ' on' : '');
+      b.style.background = '#' + m.top.toString(16).padStart(6, '0');
+      b.title = m.name;
+      b.onclick = () => { app.mat = i; if (app.tool === 'erase') app.tool = 'block'; sync(); };
+      host.appendChild(b);
+    });
   }
 }
 
@@ -69,132 +171,58 @@ function buildTray() {
   for (const spec of ROSTER) {
     const ok = avail.includes(spec);
     const el = document.createElement('button');
-    el.className = 'card' + (ok ? '' : ' locked') + (app.picked === spec.id ? ' sel' : '');
+    el.className = 'card' + (ok ? '' : ' locked') + (app.picked === spec.id ? ' on' : '');
     el.innerHTML = `<span class="n">${spec.name}</span>
-      <span class="c">${ok ? spec.cost + 'g' : yr(spec.era)}</span>
-      <span class="b">${ok ? spec.blurb : 'not invented yet'}</span>`;
+      <span class="c">${ok ? spec.cost + 'g' : yr(spec.era)}</span>`;
+    el.title = ok ? spec.blurb : 'not invented until ' + yr(spec.era);
     if (ok) el.onclick = () => { app.picked = spec.id; buildTray(); };
     tray.appendChild(el);
   }
 }
 function yr(y) { return y < 0 ? Math.abs(y) + ' BC' : y + ' AD'; }
 
-// --- input ----------------------------------------------------------------
-let drag = null;
-cv.addEventListener('pointerdown', (e) => {
-  cv.setPointerCapture(e.pointerId);
-  if (e.button !== 0) {
-    drag = { mode: 'pan', x: e.clientX, y: e.clientY, t: rend.target.clone() };
-    return;
+function sync() {
+  for (const [id, m] of [['m_build', 'build'], ['m_army', 'army'], ['m_play', 'battle']]) {
+    $(id).classList.toggle('on', app.mode === m);
   }
-  const g = ground(e);
-  if (!g) return;
-  if (app.mode === 'build') {
-    drag = { mode: 'build', down: e.shiftKey, last: -1 };
-    paintTile(g, e.shiftKey);
-  } else {
-    add(app.picked, g.x, g.z, app.team, app.hold);
-    drag = { mode: 'place' };
-  }
-});
-cv.addEventListener('pointermove', (e) => {
-  const gh = ground(e);
-  if (gh) { app.hoverI = terrain.tx(gh.x); app.hoverJ = terrain.tz(gh.z); }
-  if (!drag) return;
-  if (drag.mode === 'build') { if (gh) paintTile(gh, drag.down); return; }
-  if (drag.mode === 'pan') {
-    const k = rend.dist / cv.clientHeight * 1.4;
-    rend.target.x = drag.t.x - (e.clientX - drag.x) * k;
-    rend.target.z = drag.t.z - (e.clientY - drag.y) * k / Math.sin(Math.PI / 3);
-  }
-});
-addEventListener('pointerup', () => {
-  // Put the troops back on top of whatever you just built.
-  if (drag && drag.mode === 'build' && app.dirty) { app.dirty = false; rebuild(); }
-  drag = null;
-});
-cv.addEventListener('contextmenu', (e) => e.preventDefault());
-cv.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  rend.dist = Math.max(220, Math.min(6000, rend.dist * (e.deltaY < 0 ? 0.9 : 1 / 0.9)));
-}, { passive: false });
+  $('p_build').hidden = app.mode !== 'build';
+  $('p_army').hidden = app.mode !== 'army';
+  $('p_play').hidden = app.mode !== 'battle';
 
-// One click = one block. Shift takes one away. Painting only changes the
-// material, which is how a district gets its own ground.
-function paintTile(g, remove) {
-  const ci = terrain.tx(g.x), cj = terrain.tz(g.z);
-  const r = app.brush;
-  for (let j = cj - r; j <= cj + r; j++) {
-    for (let i = ci - r; i <= ci + r; i++) {
-      if (!terrain.inside(i, j)) continue;
-      if (Math.hypot(i - ci, j - cj) > r + 0.25) continue;
-      if (app.tool === 'paint') {
-        terrain.set(i, j, undefined, app.mat);
-      } else {
-        const lv = terrain.levelAt(i, j) + (remove ? -1 : 1);
-        terrain.set(i, j, Math.max(0, Math.min(24, lv)), remove ? undefined : app.mat);
-      }
-    }
+  for (const t of ['block', 'slab', 'paint', 'erase']) {
+    $('t_' + t).classList.toggle('on', app.tool === t);
   }
-  app.dirty = true;
+  $('brushLbl').textContent = (app.brush * 2 + 1) + '×' + (app.brush * 2 + 1);
+  $('yearLbl').textContent = yr(app.year);
+  $('sideBtn').textContent = app.team === 0 ? 'Red army' : 'Blue army';
+  $('sideBtn').className = 't wide ' + (app.team === 0 ? 'red' : 'blue');
+  $('stanceBtn').textContent = app.hold ? 'Hold ground' : 'Advance';
+  $('stanceBtn').classList.toggle('on', app.hold);
+  $('go').textContent = sim.running ? 'PAUSE' : 'GO';
+  $('go').classList.toggle('on', sim.running);
+  $('speedLbl').textContent = app.speed >= 1 ? app.speed + '×' : '1/' + Math.round(1 / app.speed) + '×';
+  buildPalettes();
 }
 
-function ground(e) {
-  const r = cv.getBoundingClientRect();
-  const nx = ((e.clientX - r.left) / r.width) * 2 - 1;
-  const ny = -((e.clientY - r.top) / r.height) * 2 + 1;
-  let p = rend.screenToGround(nx, ny, 0);
-  if (!p) return null;
-  // one refinement against the real height at that spot
-  const h = terrain.heightAt(p.x, p.z);
-  p = rend.screenToGround(nx, ny, h);
-  return p;
-}
-
-addEventListener('keydown', (e) => {
-  const k = e.key.toLowerCase();
-  if (k === ' ') { e.preventDefault(); sim.running = !sim.running; sync(); }
-  else if (k === 'r') { rebuild(); sim.running = false; sync(); }
-  else if (k === 'tab') { e.preventDefault(); app.team = 1 - app.team; sync(); }
-  else if (k === 'g') { app.hold = !app.hold; sync(); }
-  else if (k === 'b') { app.mode = app.mode === 'build' ? 'army' : 'build'; sync(); }
-  else if (k === '[') { app.brush = Math.max(0, app.brush - 1); sync(); }
-  else if (k === ']') { app.brush = Math.min(6, app.brush + 1); sync(); }
-});
-$('modeBtn').onclick = () => { app.mode = app.mode === 'build' ? 'army' : 'build'; sync(); };
-$('t_block').onclick = () => { app.tool = 'block'; sync(); };
-$('t_paint').onclick = () => { app.tool = 'paint'; sync(); };
-$('brushMinus').onclick = () => { app.brush = Math.max(0, app.brush - 1); sync(); };
-$('brushPlus').onclick = () => { app.brush = Math.min(6, app.brush + 1); sync(); };
-$('go').onclick = () => { sim.running = !sim.running; sync(); };
-$('reset').onclick = () => { rebuild(); sim.running = false; sync(); };
-$('demo').onclick = () => { demo(); sim.running = false; sync(); };
-$('teamBtn').onclick = () => { app.team = 1 - app.team; sync(); };
-$('holdBtn').onclick = () => { app.hold = !app.hold; sync(); };
+$('m_build').onclick = () => setMode('build');
+$('m_army').onclick = () => setMode('army');
+$('m_play').onclick = () => setMode('battle');
+for (const t of ['block', 'slab', 'paint', 'erase']) $('t_' + t).onclick = () => { app.tool = t; sync(); };
+$('brush').oninput = (e) => { app.brush = +e.target.value; sync(); };
+$('speed').oninput = (e) => { app.speed = SPEEDS[+e.target.value]; sync(); };
+$('sideBtn').onclick = () => { app.team = 1 - app.team; sync(); };
+$('stanceBtn').onclick = () => { app.hold = !app.hold; sync(); };
+$('go').onclick = toggleRun;
+$('reset').onclick = () => { rebuild(); sync(); };
+$('demo').onclick = () => { demo(); sync(); };
 $('year').oninput = (e) => {
-  app.year = Number(e.target.value);
-  if (!rosterFor(app.year).some(s => s.id === app.picked)) {
-    app.picked = rosterFor(app.year).slice(-1)[0].id;
-  }
+  app.year = +e.target.value;
+  const avail = rosterFor(app.year);
+  if (!avail.some(s => s.id === app.picked)) app.picked = avail[avail.length - 1].id;
   buildTray(); sync();
 };
 
-function sync() {
-  document.body.classList.toggle('buildmode', app.mode === 'build');
-  $('modeBtn').textContent = app.mode === 'build' ? 'Building' : 'Armies';
-  $('t_block').classList.toggle('on', app.tool === 'block');
-  $('t_paint').classList.toggle('on', app.tool === 'paint');
-  $('brushLbl').textContent = (app.brush * 2 + 1) + '×' + (app.brush * 2 + 1);
-  $('go').textContent = sim.running ? 'PAUSE' : 'GO';
-  $('go').classList.toggle('on', sim.running);
-  $('yearLbl').textContent = yr(app.year);
-  $('teamBtn').textContent = TEAM[app.team].name;
-  $('teamBtn').className = 'btn t' + app.team;
-  $('holdBtn').textContent = app.hold ? 'Hold' : 'Advance';
-  $('holdBtn').classList.toggle('on', app.hold);
-}
-
-// --- loop -----------------------------------------------------------------
+// --- loop ------------------------------------------------------------------
 let last = performance.now(), acc = 0;
 const DT = 1 / 60;
 function frame(now) {
@@ -205,13 +233,13 @@ function frame(now) {
   if (acc > DT * 6) acc = 0;
   rend.resize(cv.clientWidth, cv.clientHeight);
   rend.draw(sim);
-  $('hud').textContent = `${sim.aliveCount(0)} vs ${sim.aliveCount(1)}`;
+  $('redN').textContent = sim.aliveCount(0);
+  $('blueN').textContent = sim.aliveCount(1);
   requestAnimationFrame(frame);
 }
 
 setGround();
 buildTray();
-buildPalette();
 demo();
 rend.target.set(0, 0, 0);
 rend.dist = 2400;
@@ -219,44 +247,48 @@ sync();
 
 {
   const q = new URLSearchParams(location.search);
-  if (q.has('dist')) rend.dist = Number(q.get('dist'));
-  if (q.has('tx')) rend.target.x = Number(q.get('tx'));
-  if (q.has('tz')) rend.target.z = Number(q.get('tz'));
+  if (q.has('dist')) rend.dist = +q.get('dist');
+  if (q.has('tx')) rend.target.x = +q.get('tx');
+  if (q.has('tz')) rend.target.z = +q.get('tz');
   if (q.has('run')) sim.running = true;
-  const pre = Number(q.get('steps')) || 0;
-  for (let i = 0; i < pre; i++) sim.update(DT);
+  for (let i = 0, n = +q.get('steps') || 0; i < n; i++) sim.update(DT);
 }
-window.EPOCH = { app, sim, rend, terrain, add, rebuild, paintTile };
+window.EPOCH = { app, sim, rend, terrain, add, rebuild, paintTile, sync };
 
 if (new URLSearchParams(location.search).has('selftest')) {
   const out = [];
   const ok = (n, c, x = '') => out.push(`${c ? 'PASS' : 'FAIL'} ${n}${x ? ' (' + x + ')' : ''}`);
   try {
-    const i = 5, j = 5;
-    const gx = terrain.wx(i), gz = terrain.wz(j);
+    const i = 5, j = 5, gx = terrain.wx(i), gz = terrain.wz(j);
+    app.mode = 'build'; app.brush = 0; app.mat = MAT.stone;
     const l0 = terrain.levelAt(i, j);
-    app.mode = 'build'; app.tool = 'block'; app.mat = MAT.stone; app.brush = 0;
-    paintTile({ x: gx, z: gz }, false);
-    ok('click raises a block', terrain.levelAt(i, j) === l0 + 1, `${l0} -> ${terrain.levelAt(i, j)}`);
-    ok('block takes the material', terrain.typeAt(i, j) === MAT.stone);
-    paintTile({ x: gx, z: gz }, true);
-    ok('shift removes it', terrain.levelAt(i, j) === l0);
+    app.tool = 'block'; paintTile({ x: gx, z: gz }, false);
+    ok('block adds two half-steps', terrain.levelAt(i, j) === l0 + 2, `${l0} -> ${terrain.levelAt(i, j)}`);
+    app.tool = 'slab'; paintTile({ x: gx, z: gz }, false);
+    ok('slab adds one', terrain.levelAt(i, j) === l0 + 3);
+    app.tool = 'erase'; paintTile({ x: gx, z: gz }, false);
+    ok('dig removes a block', terrain.levelAt(i, j) === l0 + 1);
     app.tool = 'paint'; app.mat = MAT.crop;
-    const lv = terrain.levelAt(i, j);
-    paintTile({ x: gx, z: gz }, false);
-    ok('ground paint keeps height', terrain.levelAt(i, j) === lv && terrain.typeAt(i, j) === MAT.crop);
-    app.brush = 2; app.tool = 'block'; app.mat = MAT.brick;
-    paintTile({ x: terrain.wx(20), z: terrain.wz(20) }, false);
-    let n = 0;
-    for (let b = 18; b <= 22; b++) for (let a = 18; a <= 22; a++) if (terrain.levelAt(a, b) > 0) n++;
-    ok('brush covers an area', n >= 9, n + ' tiles');
+    const lv = terrain.levelAt(i, j); paintTile({ x: gx, z: gz }, false);
+    ok('paint keeps height', terrain.levelAt(i, j) === lv && terrain.typeAt(i, j) === MAT.crop);
+    setMode('army');
+    ok('army panel shows', !$('p_army').hidden && $('p_build').hidden);
+    setMode('battle');
+    ok('battle panel shows', !$('p_play').hidden && $('p_army').hidden);
+    setMode('build');
+    ok('palettes split ground/build',
+       $('pal_ground').children.length === MATS.filter(m => !m.build).length &&
+       $('pal_build').children.length === MATS.filter(m => m.build).length,
+       `${$('pal_ground').children.length}/${$('pal_build').children.length}`);
+    app.year = -2000; buildTray();
+    ok('year locks later units', document.querySelectorAll('.card.locked').length > 0,
+       document.querySelectorAll('.card.locked').length + ' locked');
     rebuild();
-    ok('rebuild keeps the army', sim.units.length === app.placed.length, `${sim.units.length}`);
-    ok('walls are unclimbable', !terrain.passable(19, 20, 20, 20) || terrain.levelAt(20, 20) <= 1);
-    ok('flow field exists', !!sim.flow[0]);
-    sim.rebuildFlow();
-    ok('flow field builds', sim.flow[0].ready);
+    ok('rebuild keeps the army', sim.units.length === app.placed.length, String(sim.units.length));
+    ok('flow field builds', (sim.rebuildFlow(), sim.flow[0].ready));
   } catch (e) { out.push('FAIL threw: ' + e.message); }
   document.title = 'SELFTEST ' + out.join(' | ');
 }
+
+addEventListener('resize', () => rend.resize(cv.clientWidth, cv.clientHeight));
 requestAnimationFrame(frame);
