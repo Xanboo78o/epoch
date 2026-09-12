@@ -8,6 +8,25 @@ building material. Then you put two armies on it and press GO.
 The map is 192x192 blocks and its mesh is **chunked** (32x32): painting a block
 rebuilds the nine chunks around it, not the whole world.
 
+Heights are stored in **half-blocks** so slabs exist. The block stays the unit
+you build with — the block tool places two half-steps, the slab tool one — and
+the climb limit is one full block, so a slab is always walkable and therefore
+useful as a stair.
+
+## Textures
+
+`js/textures.js` draws every material at load into one atlas: albedo, a height
+map, and a packed ORM tile (roughness in green, metalness in blue), the way an
+HD resource pack ships them. The normal map is a Sobel pass over the height, so
+a mortar line is a real groove rather than a painted stripe, and a **parallax
+shader** injected into MeshStandardMaterial marches the height map against the
+view direction — the geometry is a flat quad but cobbles and plank grooves have
+genuine depth. Nothing is downloaded; it is a few kilobytes of canvas code.
+
+Each tile also picks one of four UV rotations from its position hash. Without
+that, a 64px cobble tile repeats identically across a street and reads as a
+grid instead of a surface.
+
 One thing the format cannot do: a heightmap gives every tile exactly one
 height, so there are no overhangs and no holes — no windows, no doorway
 lintels, no roof over a hollow room. Houses with roofs are solid; `compound()`

@@ -2,7 +2,8 @@
 // rotates; you pan and you zoom, that is all.
 
 import * as THREE from './vendor/three.module.min.js';
-import { TILE, LEVEL, TILE_COLOUR, TILE_SIDE, MATS, CHUNK } from './terrain.js';
+import { TILE, LEVEL, BLOCK, TILE_COLOUR, TILE_SIDE, MATS, CHUNK } from './terrain.js';
+import { buildAtlas, uvFor, TEX } from './textures.js';
 
 export const PITCH = 60 * Math.PI / 180;   // locked. Do not add yaw controls.
 export const TEAM = [
@@ -28,6 +29,11 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Without tone mapping the PBR maps come out flat and chalky; ACES gives
+    // the highlights somewhere to roll off to and the shadows some depth.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x9fc0d8);
@@ -37,9 +43,9 @@ export class Renderer {
     this.target = new THREE.Vector3(0, 0, 0);
     this.dist = 1500;
 
-    const hemi = new THREE.HemisphereLight(0xcfe3f2, 0x6b6048, 0.85);
+    const hemi = new THREE.HemisphereLight(0xbcd6ea, 0x5a5240, 0.55);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff2d8, 1.25);
+    const sun = new THREE.DirectionalLight(0xfff0cf, 2.1);
     sun.position.set(-900, 1500, 700);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -65,6 +71,35 @@ export class Renderer {
     this.chunks = new Map();
     this.terrainMat = null;
     this.propsV = -1;
+    this.makeEnvironment();
+  }
+
+  // Metalness is a lie without something to reflect: a metallic surface with
+  // no environment just renders black. A tiny procedural sky/ground gradient
+  // is enough to make marble and water read as polished.
+  makeEnvironment() {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, 64);
+    grad.addColorStop(0, '#bcd8ee');
+    grad.addColorStop(0.48, '#dfeaf2');
+    grad.addColorStop(0.52, '#8d8a76');
+    grad.addColorStop(1, '#4c4839');
+    g.fillStyle = grad; g.fillRect(0, 0, 128, 64);
+    // a soft sun blob so highlights have somewhere to come from
+    const sun = g.createRadialGradient(34, 18, 0, 34, 18, 20);
+    sun.addColorStop(0, 'rgba(255,248,225,0.95)');
+    sun.addColorStop(1, 'rgba(255,248,225,0)');
+    g.fillStyle = sun; g.fillRect(0, 0, 128, 48);
+    const tex = new THREE.CanvasTexture(c);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromEquirectangular(tex).texture;
+    this.scene.environmentIntensity = 0.55;
+    pmrem.dispose();
+    tex.dispose();
   }
 
   makeInstanced(geo, count, rough, metal) {
@@ -116,11 +151,99 @@ export class Renderer {
   // The map is built as real tiles: a flat top quad per tile, plus a vertical
   // wall wherever a neighbour sits lower. No smooth ground anywhere — the
   // steps between levels are the whole look.
+  // --- the block material -------------------------------------------------
+  // One atlas, one material, one draw call per chunk. Albedo, normal,
+  // roughness and metalness all come out of textures.js, and a parallax pass
+  // on top uses the height atlas: the actual geometry is a flat quad, but
+  // mortar lines, cobbles and plank grooves shift against the view direction
+  // so they read as real depth. That is where nearly all the detail comes
+  // from — the height involved is a fraction of a block.
+  makeBlockMaterial() {
+    const at = buildAtlas(MATS);
+    this.atlas = at;
+    const mk = (cv, srgb) => {
+      const t = new THREE.CanvasTexture(cv);
+      t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+      t.magFilter = THREE.LinearFilter;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+      t.generateMipmaps = true;
+      t.needsUpdate = true;
+      return t;
+    };
+    const mat = new THREE.MeshStandardMaterial({
+      map: mk(at.albedo, true),
+      normalMap: mk(at.normal, false),
+      roughnessMap: mk(at.orm, false),
+      metalnessMap: mk(at.orm, false),
+      roughness: 1, metalness: 1,           // scaled by the maps
+      vertexColors: true,
+      normalScale: new THREE.Vector2(1.1, 1.1),
+    });
+    const heightTex = mk(at.height, false);
+    mat.userData.height = heightTex;
+
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.heightMap = { value: heightTex };
+      shader.uniforms.parallaxScale = { value: 0.035 };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vViewDirTS;
+          attribute vec3 aTan;`)
+        .replace('#include <fog_vertex>', `#include <fog_vertex>
+          // Build a tangent basis from the face normal and the supplied
+          // tangent, then take the view direction into tangent space.
+          vec3 N = normalize(normalMatrix * objectNormal);
+          vec3 T = normalize(normalMatrix * aTan);
+          vec3 B = cross(N, T);
+          vec3 vdir = -mvPosition.xyz;
+          vViewDirTS = vec3(dot(vdir, T), dot(vdir, B), dot(vdir, N));`);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          uniform sampler2D heightMap;
+          uniform float parallaxScale;
+          varying vec3 vViewDirTS;
+          vec2 parallaxUV(vec2 uv, vec3 v) {
+            // Steep parallax: march along the view ray until the sampled
+            // height is above the ray, then take the crossing point.
+            float steps = mix(24.0, 8.0, clamp(abs(normalize(v).z), 0.0, 1.0));
+            float layer = 1.0 / steps;
+            vec2 delta = (v.xy / max(0.2, abs(v.z))) * parallaxScale / steps;
+            float depth = 0.0;
+            vec2 cur = uv;
+            float h = texture2D(heightMap, cur).r;
+            for (int i = 0; i < 24; i++) {
+              if (depth >= 1.0 - h) break;
+              cur -= delta;
+              h = texture2D(heightMap, cur).r;
+              depth += layer;
+            }
+            return cur;
+          }`)
+        .replace('#include <map_fragment>', `
+          vec2 pUv = parallaxUV(vMapUv, normalize(vViewDirTS));
+          vec4 sampledDiffuseColor = texture2D(map, pUv);
+          diffuseColor *= sampledDiffuseColor;`)
+        .replace('#include <normal_fragment_maps>', `
+          vec3 mapN = texture2D(normalMap, pUv).xyz * 2.0 - 1.0;
+          mapN.xy *= normalScale;
+          normal = normalize(tbn * mapN);`)
+        .replace('#include <roughnessmap_fragment>', `
+          float roughnessFactor = roughness * texture2D(roughnessMap, pUv).g;`)
+        .replace('#include <metalnessmap_fragment>', `
+          float metalnessFactor = metalness * texture2D(metalnessMap, pUv).b;`);
+      this.blockShader = shader;
+    };
+    return mat;
+  }
+
   // Only the chunks the player actually edited get rebuilt. At 37k tiles,
   // regenerating the whole map on every painted block made building unusable.
   buildTerrain(terrain) {
     if (!terrain.dirty || terrain.dirty.size === 0) return;
     if (!this.chunks) this.chunks = new Map();
+    if (!this.terrainMat) this.terrainMat = this.makeBlockMaterial();
     for (const ck of terrain.dirty) this.buildChunk(terrain, ck);
     terrain.dirty.clear();
   }
@@ -130,14 +253,30 @@ export class Renderer {
     const ci = ck % terrain.cw, cj = (ck / terrain.cw) | 0;
     const i0 = ci * CH, j0 = cj * CH;
     const i1 = Math.min(terrain.w, i0 + CH), j1 = Math.min(terrain.h, j0 + CH);
-    const pos = [], col = [], nrm = [];
-    const c = new THREE.Color(), cw = new THREE.Color();
+    const pos = [], col = [], nrm = [], uvs = [], tan = [];
+    const c = new THREE.Color();
     const half = TILE / 2;
+    const cols = this.atlas.cols, rows = this.atlas.rows;
 
-    const quad = (ax, ay, az, bx, by, bz, cx2, cy2, cz2, dx, dy, dz, nx, ny, nz, colr) => {
+    // a, b, c, d wound CCW; uv corners follow the same order.
+    // `rot` turns the texture a quarter turn at a time. Without it every tile
+    // samples the atlas identically and a cobbled street becomes a very
+    // obvious repeating grid; with it the same 64px tile reads as a surface.
+    const quad = (ax, ay, az, bx, by, bz, cx2, cy2, cz2, dx, dy, dz,
+                  nx, ny, nz, tx2, ty2, tz2, colr, u, vlo, vhi, rot = 0) => {
       pos.push(ax, ay, az, bx, by, bz, cx2, cy2, cz2,
                ax, ay, az, cx2, cy2, cz2, dx, dy, dz);
-      for (let k = 0; k < 6; k++) { nrm.push(nx, ny, nz); col.push(colr.r, colr.g, colr.b); }
+      const k0 = [u.u0, vlo], k1 = [u.u1, vlo], k2 = [u.u1, vhi], k3 = [u.u0, vhi];
+      const corners = [k0, k1, k2, k3];
+      const A = corners[rot & 3], B = corners[(rot + 1) & 3],
+            C = corners[(rot + 2) & 3], D = corners[(rot + 3) & 3];
+      uvs.push(A[0], A[1], B[0], B[1], C[0], C[1],
+               A[0], A[1], C[0], C[1], D[0], D[1]);
+      for (let k = 0; k < 6; k++) {
+        nrm.push(nx, ny, nz);
+        tan.push(tx2, ty2, tz2);
+        col.push(colr.r, colr.g, colr.b);
+      }
     };
 
     for (let j = j0; j < j1; j++) {
@@ -146,32 +285,40 @@ export class Renderer {
         const ty = terrain.typeAt(i, j);
         let y = lv * LEVEL;
         const x = terrain.wx(i), z = terrain.wz(j);
-        c.setHex(TILE_COLOUR[ty]);
-        // a touch of per-tile variation so a big field is not one flat colour
+        const uv = uvFor(ty, cols, rows);
+        // Faint per-tile tint only — the texture now carries the detail, so a
+        // heavy vertex shade would just fight it.
         const n = ((i * 73856093) ^ (j * 19349663)) & 255;
-        const shade = 0.94 + (n / 255) * 0.12;
-        c.multiplyScalar(shade);
+        c.setRGB(1, 1, 1).multiplyScalar(0.95 + (n / 255) * 0.1);
         if (MATS[ty].liquid) y -= LEVEL * 0.35;
-        quad(x - half, y, z - half, x - half, y, z + half,
-             x + half, y, z + half, x + half, y, z - half, 0, 1, 0, c);
 
-        // walls down to any lower neighbour, in the material's own side colour
-        cw.setHex(TILE_SIDE[ty]).multiplyScalar(shade);
+        // Corner order matters: going round the other way flips the winding
+        // and the whole ground gets backface-culled, leaving the buildings
+        // apparently floating in the sky.
+        quad(x - half, y, z - half, x - half, y, z + half,
+             x + half, y, z + half, x + half, y, z - half,
+             0, 1, 0, 1, 0, 0, c, uv, uv.v0, uv.v1, n & 3);
+
+        const cSide = c.clone().multiplyScalar(0.82);
         const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
         for (const [di, dj] of sides) {
           const nl = terrain.inside(i + di, j + dj) ? terrain.levelAt(i + di, j + dj) : lv;
           if (nl >= lv) continue;
-          const ny2 = nl * LEVEL;
+          const yBot = nl * LEVEL;
           const ex = di * half, ez = dj * half;
-          // Edge tangent = normal x up = (-dj, 0, di). Deriving it rather than
-          // picking the non-zero axis keeps the winding consistent for all
-          // four sides — the naive version left west and north walls inside
-          // out, so they were backface-culled and you saw straight through the
-          // hillside.
           const tx = -dj * half, tz = di * half;
-          quad(x + ex - tx, y, z + ez - tz, x + ex + tx, y, z + ez + tz,
-               x + ex + tx, ny2, z + ez + tz, x + ex - tx, ny2, z + ez - tz,
-               di, 0, dj, cw);
+          // One quad per BLOCK of height, so every block face gets its own
+          // whole texture instead of one stretched smear up the wall.
+          let yTop = y;
+          while (yTop > yBot + 0.01) {
+            const seg = Math.min(BLOCK, yTop - yBot);
+            const yLo = yTop - seg;
+            const vhi = uv.v1, vlo = uv.v1 - (uv.v1 - uv.v0) * (seg / BLOCK);
+            quad(x + ex - tx, yTop, z + ez - tz, x + ex + tx, yTop, z + ez + tz,
+                 x + ex + tx, yLo, z + ez + tz, x + ex - tx, yLo, z + ez - tz,
+                 di, 0, dj, tx / half, 0, tz / half, cSide, uv, vhi, vlo);
+            yTop = yLo;
+          }
         }
       }
     }
@@ -183,10 +330,9 @@ export class Renderer {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
     geo.computeBoundingSphere();
-    if (!this.terrainMat) {
-      this.terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
-    }
     m = new THREE.Mesh(geo, this.terrainMat);
     m.receiveShadow = true;
     m.castShadow = true;

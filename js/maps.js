@@ -114,7 +114,7 @@ export function makeKit(T) {
           const d = Math.hypot(i * 0.8, j);
           if (d > rOuter) continue;
           if (d < rInner) { set(cx + i, cz + j, 0, floorMat); continue; }
-          const tier = Math.floor((d - rInner) / 1.5) + 1;
+          const tier = (Math.floor((d - rInner) / 1.5) + 1) * 2;   // 1 block per tier
           set(cx + i, cz + j, tier, m);
         }
       }
@@ -149,7 +149,7 @@ export function makeKit(T) {
       const steps = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0));
       for (let s = 0; s <= steps; s++) {
         const t = s / steps;
-        set(Math.round(x0 + (x1 - x0) * t), Math.round(z0 + (z1 - z0) * t), 1, MAT.timber);
+        set(Math.round(x0 + (x1 - x0) * t), Math.round(z0 + (z1 - z0) * t), 2, MAT.timber);
       }
     },
 
@@ -164,6 +164,9 @@ export function makeKit(T) {
 // ---------------------------------------------------------------- ROME ----
 export function buildRome(T) {
   const k = makeKit(T);
+  // Heights below are written in BLOCKS; storage is in half-blocks so that
+  // slabs exist, so B() converts. Write B(9) for a nine-block wall.
+  const B = (n) => Math.round(n * 2);
   T.fill(MAT.grass, 0);
 
   // --- the river, and the sand along it ---
@@ -172,32 +175,32 @@ export function buildRome(T) {
   k.slab(0, 127, 191, 129, 0, MAT.sand);
 
   // --- the bridge, with a raised deck and stone parapets ---
-  k.slab(92, 114, 99, 130, 1, MAT.cobble);
-  k.slab(92, 114, 92, 130, 2, MAT.stone);
-  k.slab(99, 114, 99, 130, 2, MAT.stone);
+  k.slab(92, 114, 99, 130, B(1), MAT.cobble);
+  k.slab(92, 114, 92, 130, B(2), MAT.stone);
+  k.slab(99, 114, 99, 130, B(2), MAT.stone);
   k.slab(93, 100, 98, 115, 0, MAT.road);
   k.slab(93, 129, 98, 150, 0, MAT.road);
 
   // --- the city, north of the river ---
   k.slab(40, 22, 152, 106, 0, MAT.cobble);
   // ramparts with towers at every corner and beside every gate
-  k.rampart(40, 22, 152, 22, 9, MAT.stone, 3);
-  k.rampart(40, 106, 152, 106, 9, MAT.stone, 3);
-  k.rampart(40, 22, 40, 106, 9, MAT.stone, 3);
-  k.rampart(152, 22, 152, 106, 9, MAT.stone, 3);
-  for (const [i, j] of [[40,22],[152,22],[40,106],[152,106]]) k.tower(i, j, 4, 12, MAT.stone);
+  k.rampart(40, 22, 152, 22, B(9), MAT.stone, 3);
+  k.rampart(40, 106, 152, 106, B(9), MAT.stone, 3);
+  k.rampart(40, 22, 40, 106, B(9), MAT.stone, 3);
+  k.rampart(152, 22, 152, 106, B(9), MAT.stone, 3);
+  for (const [i, j] of [[40,22],[152,22],[40,106],[152,106]]) k.tower(i, j, 4, B(12), MAT.stone);
 
   // four gates, each flanked by a pair of towers
   const gates = [[96, 22, 'N'], [96, 106, 'S'], [40, 64, 'W'], [152, 64, 'E']];
   for (const [gi, gj, side] of gates) {
     if (side === 'N' || side === 'S') {
       k.slab(gi - 2, gj - 2, gi + 2, gj + 2, 0, MAT.road);
-      k.tower(gi - 5, gj, 3, 13, MAT.stone);
-      k.tower(gi + 5, gj, 3, 13, MAT.stone);
+      k.tower(gi - 5, gj, 3, B(13), MAT.stone);
+      k.tower(gi + 5, gj, 3, B(13), MAT.stone);
     } else {
       k.slab(gi - 2, gj - 2, gi + 2, gj + 2, 0, MAT.road);
-      k.tower(gi, gj - 5, 3, 13, MAT.stone);
-      k.tower(gi, gj + 5, 3, 13, MAT.stone);
+      k.tower(gi, gj - 5, 3, B(13), MAT.stone);
+      k.tower(gi, gj + 5, 3, B(13), MAT.stone);
     }
   }
 
@@ -214,28 +217,28 @@ export function buildRome(T) {
       if (Math.abs(cx - 96) < 22 && Math.abs(cz - 64) < 18) continue;   // forum
       if (Math.hypot((cx - 128) * 0.8, cz - 88) < 20) continue;         // amphitheatre
       n++;
-      if (n % 5 === 0) k.compound(cx, cz, 10, 9, 4, MAT.plaster, 'S');
-      else k.house(cx, cz, 9 - (n % 3), 8 - (n % 2), 4 + (n % 3), MAT.plaster, roofs[n % 3]);
+      if (n % 5 === 0) k.compound(cx, cz, 10, 9, B(4), MAT.plaster, 'S');
+      else k.house(cx, cz, 9 - (n % 3), 8 - (n % 2), B(4 + (n % 3)), MAT.plaster, roofs[n % 3]);
     }
   }
 
   // --- the forum: a marble plaza, a colonnade, and a temple ---
-  k.slab(80, 52, 112, 78, 1, MAT.marble);
-  k.colonnade(80, 52, 112, 52, 6, MAT.marble, 3);
-  k.colonnade(80, 78, 112, 78, 6, MAT.marble, 3);
-  k.colonnade(80, 52, 80, 78, 6, MAT.marble, 3);
-  k.colonnade(112, 52, 112, 78, 6, MAT.marble, 3);
+  k.slab(80, 52, 112, 78, B(1), MAT.marble);
+  k.colonnade(80, 52, 112, 52, B(6), MAT.marble, 3);
+  k.colonnade(80, 78, 112, 78, B(6), MAT.marble, 3);
+  k.colonnade(80, 52, 80, 78, B(6), MAT.marble, 3);
+  k.colonnade(112, 52, 112, 78, B(6), MAT.marble, 3);
   // the temple on its podium
-  k.slab(90, 60, 102, 72, 3, MAT.marble);
-  k.colonnade(90, 60, 102, 60, 8, MAT.marble, 2);
-  k.colonnade(90, 72, 102, 72, 8, MAT.marble, 2);
-  k.roof(90, 60, 102, 72, 9, MAT.brick);
+  k.slab(90, 60, 102, 72, B(3), MAT.marble);
+  k.colonnade(90, 60, 102, 60, B(8), MAT.marble, 2);
+  k.colonnade(90, 72, 102, 72, B(8), MAT.marble, 2);
+  k.roof(90, 60, 102, 72, B(9), MAT.brick);
 
   // --- the amphitheatre ---
   k.amphitheatre(128, 88, 18, 9, MAT.stone, MAT.sand);
 
   // --- the aqueduct, marching in from the east ---
-  k.aqueduct(191, 40, 153, 40, 8, MAT.stone);
+  k.aqueduct(191, 40, 153, 40, B(8), MAT.stone);
 
   // --- farmland, south of the river ---
   k.field(16, 140, 60, 176, 'z');
@@ -244,8 +247,8 @@ export function buildRome(T) {
   k.fence(12, 180, 108, 180);
   k.fence(12, 136, 12, 180);
   k.fence(108, 136, 108, 180);
-  k.compound(34, 150, 14, 12, 4, MAT.plaster, 'N');      // the villa yard
-  k.house(30, 146, 9, 7, 5, MAT.plaster, MAT.thatch);
+  k.compound(34, 150, 14, 12, B(4), MAT.plaster, 'N');      // the villa yard
+  k.house(30, 146, 9, 7, B(5), MAT.plaster, MAT.thatch);
   k.orchard(120, 140, 172, 176, 5);
   k.slab(93, 150, 98, 180, 0, MAT.road);
 

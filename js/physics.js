@@ -52,6 +52,11 @@ export class World {
       tag: opts.tag || '',
       team: opts.team !== undefined ? opts.team : -1,
       solid: opts.solid !== false,
+      // In the grid (so weapons can hit it) but not part of crowd separation.
+      // Only a man's footprint shoves other men; his chest and head being
+      // separate colliders meant three overlapping spheres per pair, all
+      // fighting each other every frame.
+      push: opts.push !== false,
       drag: opts.drag || 0,
       dead: false,
       idx: 0,
@@ -115,22 +120,34 @@ export class World {
     // bodies shove each other; crowds pack and piles form
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i];
-      if (a.dead || !a.solid) continue;
+      if (a.dead || !a.solid || !a.push) continue;
       g.near(a.x, a.z, (j) => {
         if (j <= i) return;
         const b = pts[j];
-        if (b.dead || !b.solid || b.unit === a.unit) return;
+        if (b.dead || !b.solid || !b.push || b.unit === a.unit) return;
         const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
         const rr = a.r + b.r;
         const d2 = dx * dx + dy * dy + dz * dz;
         if (d2 >= rr * rr || d2 < 1e-6) return;
         const d = Math.sqrt(d2);
-        const push = (rr - d) / d;
+        // Relax a third of the overlap per step instead of all of it. Solving
+        // it outright makes a packed formation snap men about; over a few
+        // frames this settles to the same place without the twitching.
+        const push = (rr - d) / d * 0.35;
         const im = a.im + b.im;
         if (im === 0) return;
         const wa = a.im / im, wb = b.im / im;
-        a.x -= dx * push * wa; a.y -= dy * push * wa; a.z -= dz * push * wa;
-        b.x += dx * push * wb; b.y += dy * push * wb; b.z += dz * push * wb;
+        const ax = dx * push * wa, ay = dy * push * wa, az = dz * push * wa;
+        const bx = dx * push * wb, by = dy * push * wb, bz = dz * push * wb;
+        a.x -= ax; a.y -= ay; a.z -= az;
+        b.x += bx; b.y += by; b.z += bz;
+        // Separating two bodies by moving them is fine; letting that movement
+        // become VELOCITY is not — in a packed formation it fires men out of
+        // the crowd at twice their top speed. Carry most of it into the
+        // previous position so only a little of the shove survives as motion.
+        const keep = 0.85;
+        a.px -= ax * keep; a.py -= ay * keep; a.pz -= az * keep;
+        b.px += bx * keep; b.py += by * keep; b.pz += bz * keep;
       });
     }
 
@@ -155,19 +172,88 @@ export class World {
         b.x -= dx * diff * wb; b.y -= dy * diff * wb; b.z -= dz * diff * wb;
       }
 
+      // --- blocks have SIDES, resolved BEFORE the floor clamp ---
+      // Order matters: the floor clamp below teleports a point to the top of
+      // whatever column it is standing in. If a man gets shoved into a wall
+      // tile and the clamp runs first, he is instantly on top of a nine-block
+      // rampart. Pushing him out of the column first makes that impossible.
+      if (T.tx) {
+        const TILE_W = T.step;
+        for (let i = 0; i < pts.length; i++) {
+          const q = pts[i];
+          if (q.dead || q.im === 0 || !q.push) continue;
+          const climb = q.y - q.r + T.climbY;
+
+          // If he is standing INSIDE a column he has no business being in —
+          // shoved there by the crowd at a gate, usually — evict him toward
+          // the lowest neighbour first. Checking only the neighbouring columns
+          // missed this case entirely, and the floor clamp then stood him on
+          // top of the tower.
+          const oi = T.tx(q.x), oj = T.tz(q.z);
+          if (T.topAt(oi, oj) > climb) {
+            let bi = 0, bj = 0, best = Infinity;
+            for (let s3 = 0; s3 < 4; s3++) {
+              const ei = s3 === 0 ? 1 : s3 === 1 ? -1 : 0;
+              const ej = s3 === 2 ? 1 : s3 === 3 ? -1 : 0;
+              const top = T.topAt(oi + ei, oj + ej);
+              if (top < best) { best = top; bi = ei; bj = ej; }
+            }
+            const halfT = T.step * 0.5;
+            if (bi) {
+              const edge = T.wx(oi) + bi * halfT;
+              const want = edge + bi * (q.r + 0.5);
+              q.px += want - q.x; q.x = want;
+            } else {
+              const edge = T.wz(oj) + bj * halfT;
+              const want = edge + bj * (q.r + 0.5);
+              q.pz += want - q.z; q.z = want;
+            }
+          }
+
+          // tx/tz are divisions; computing them once per point instead of
+          // once per neighbour is most of the cost of this pass.
+          const ci = T.tx(q.x), cj = T.tz(q.z);
+          for (let s2 = 0; s2 < 4; s2++) {
+            const di = s2 === 0 ? 1 : s2 === 1 ? -1 : 0;
+            const dj = s2 === 2 ? 1 : s2 === 3 ? -1 : 0;
+            const ti = ci + di, tj = cj + dj;
+            if (T.topAt(ti, tj) <= climb) continue;
+            if (di) {
+              const edge = T.wx(ti) - di * TILE_W * 0.5;
+              const pen = (q.x + q.r * di - edge) * di;
+              if (pen > 0) { q.x -= di * pen; q.px -= di * pen; }
+            } else {
+              const edge = T.wz(tj) - dj * TILE_W * 0.5;
+              const pen = (q.z + q.r * dj - edge) * dj;
+              if (pen > 0) { q.z -= dj * pen; q.pz -= dj * pen; }
+            }
+          }
+        }
+      }
+
+      // Ground contact is a pure position clamp here. Friction must NOT live
+      // in this loop: it runs once per solver iteration, so a point would be
+      // slowed one to four times per step depending on how the constraints
+      // happened to shove it, which is what made soldiers lurch and stall.
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i];
         if (p.dead || p.im === 0) continue;
         const floor = T.heightAt(p.x, p.z) + p.r;
         if (p.y < floor) {
           p.y = floor;
-          // friction in the ground plane
-          const vx = p.x - p.px, vz = p.z - p.pz;
-          p.px = p.x - vx * 0.55;
-          p.pz = p.z - vz * 0.55;
           if (p.py < floor) p.py = floor;
         }
       }
+    }
+
+    // --- friction, exactly once per step ---
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      if (p.dead || p.im === 0) continue;
+      if (p.y > T.heightAt(p.x, p.z) + p.r + 0.5) continue;
+      const vx = p.x - p.px, vz = p.z - p.pz;
+      p.px = p.x - vx * 0.86;
+      p.pz = p.z - vz * 0.86;
     }
   }
 

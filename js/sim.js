@@ -197,8 +197,14 @@ export class Sim {
     // --- walk ---
     // No leg cycle any more: hold the base at standing height and bob the
     // chest. At the zoom this game is played at, a bob reads as a stride.
+    // Stand height must equal the base's own collision radius, or the
+    // controller pushes down while the floor pushes up, forever.
+    // The correction is clamped because tiles are FLAT with hard steps between
+    // them: crossing one changes `ground` by a whole block in a single frame,
+    // and an unclamped spring turned that into a launch.
     const baseVel = (p.base.y - p.base.py) / dt;
-    A(p.base, 0, ((ground + 9 * s) - p.base.y) * 300 - baseVel * 8, 0);
+    const lift = ((ground + 11 * s) - p.base.y) * 300 - baseVel * 8;
+    A(p.base, 0, Math.max(-4000, Math.min(4000, lift)), 0);
     u.gait += dt * (moving ? 9 * spd : 1.2);
     u.bob = moving ? Math.sin(u.gait) * 2.2 * s : 0;
 
@@ -213,9 +219,16 @@ export class Sim {
       if (moving) { if (!u.hold) { u.anchorX = p.base.x; u.anchorZ = p.base.z; } }
       else A(p.base, (u.anchorX - p.base.x) * 1.8, 0, (u.anchorZ - p.base.z) * 1.8);
 
-      const grounded = p.base.y < ground + 18 * s;
-      if (grounded && moving) {
-        const cap = tv + 20;
+      // The governor runs whenever he has a foot down, NOT only while walking.
+      // A man whose way is blocked stops "moving", and the old code switched
+      // his speed limit off at exactly that moment — so the rank behind shoved
+      // him along at twice walking pace until he popped free and walked again.
+      // That stop-lurch-stop cycle was the stutter.
+      // Generous, so that stepping up a block does not count as airborne and
+      // switch the speed limit off mid-stride.
+      const grounded = p.base.y < ground + 34 * s;
+      if (grounded) {
+        const cap = tv + 35;
         for (const q of [p.base, p.chest, p.head]) {
           const qx = (q.x - q.px) / dt, qz = (q.z - q.pz) / dt;
           const sp2 = Math.hypot(qx, qz);

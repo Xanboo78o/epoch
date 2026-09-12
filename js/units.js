@@ -82,12 +82,12 @@ export function buildUnit(world, spec, x, z, groundY, team, uid, yaw) {
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
 
   const pt = {};
-  pt.base  = world.addPoint(x, groundY + 9 * s, z,
-    { ...common, r: 9 * s, im: 1 / (1.2 * m), tag: 'base' });
+  pt.base  = world.addPoint(x, groundY + 11 * s, z,
+    { ...common, r: 11 * s, im: 1 / (1.2 * m), tag: 'base' });
   pt.chest = world.addPoint(x, groundY + 40 * s, z,
-    { ...common, r: 11 * s, im: 1 / (2.6 * m), tag: 'chest' });
+    { ...common, r: 11 * s, im: 1 / (2.6 * m), tag: 'chest', push: false });
   pt.head  = world.addPoint(x, groundY + 62 * s, z,
-    { ...common, r: 7 * s, im: 1 / (1.0 * m), tag: 'head' });
+    { ...common, r: 7 * s, im: 1 / (1.0 * m), tag: 'head', push: false });
 
   const bones = [
     world.addStick(pt.base, pt.chest),

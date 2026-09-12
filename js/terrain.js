@@ -7,29 +7,34 @@
 // a door and a window in it.
 export const BLOCK = 18;
 export const TILE = BLOCK;
-export const LEVEL = BLOCK;
+// Heights are stored in HALF-blocks so slabs exist, but the block stays the
+// unit you build with: the block tool places two of these, the slab tool one.
+// Storing at this resolution costs nothing and means a slab is never a special
+// case for the renderer or the physics — it is just an odd height.
+export const SLAB = BLOCK / 2;
+export const LEVEL = SLAB;
 export const CHUNK = 32;       // tiles per chunk edge; meshes rebuild per chunk
 
 // Ground materials you find, then building materials you place. A wall is
 // nothing more than tiles raised a few levels with a build material on them.
 export const MATS = [
-  { id: 'grass',  name: 'Grass',      top: 0x7d9450, side: 0x5d6f3c, build: false },
-  { id: 'dirt',   name: 'Dirt',       top: 0x9a7a4e, side: 0x6f5836, build: false },
-  { id: 'rock',   name: 'Rock',       top: 0x8e8a80, side: 0x66635c, build: false },
-  { id: 'water',  name: 'Water',      top: 0x4d7fa8, side: 0x3a6183, build: false, liquid: true },
-  { id: 'sand',   name: 'Sand',       top: 0xd6c88c, side: 0xa89c69, build: false },
-  { id: 'crop',   name: 'Crop',       top: 0xbfa83f, side: 0x8d7a2c, build: false },
-  { id: 'wood',   name: 'Woodland',   top: 0x3f5b33, side: 0x2b3e23, build: false },
-  { id: 'road',   name: 'Road',       top: 0xb9a375, side: 0x8b7a57, build: false },
+  { id: 'grass',  name: 'Grass',      top: 0x7d9450, side: 0x5d6f3c, build: false, rough: 0.98, metal: 0,    bump: 1.6 },
+  { id: 'dirt',   name: 'Dirt',       top: 0x9a7a4e, side: 0x6f5836, build: false, rough: 0.99, metal: 0,    bump: 2.0 },
+  { id: 'rock',   name: 'Rock',       top: 0x8e8a80, side: 0x66635c, build: false, rough: 0.90, metal: 0.04, bump: 3.4 },
+  { id: 'water',  name: 'Water',      top: 0x4d7fa8, side: 0x3a6183, build: false, liquid: true, rough: 0.10, metal: 0.40, bump: 1.1 },
+  { id: 'sand',   name: 'Sand',       top: 0xd6c88c, side: 0xa89c69, build: false, rough: 0.97, metal: 0,    bump: 1.2 },
+  { id: 'crop',   name: 'Crop',       top: 0xbfa83f, side: 0x8d7a2c, build: false, rough: 0.95, metal: 0,    bump: 2.2 },
+  { id: 'wood',   name: 'Woodland',   top: 0x3f5b33, side: 0x2b3e23, build: false, rough: 0.96, metal: 0,    bump: 2.6 },
+  { id: 'road',   name: 'Road',       top: 0xb9a375, side: 0x8b7a57, build: false, rough: 0.94, metal: 0,    bump: 2.0 },
   // --- build materials ---
-  { id: 'stone',  name: 'Stone Wall', top: 0xa9a294, side: 0x7e786c, build: true },
-  { id: 'brick',  name: 'Brick',      top: 0xa8593f, side: 0x7c412d, build: true },
-  { id: 'marble', name: 'Marble',     top: 0xe6e2d6, side: 0xb9b4a6, build: true },
-  { id: 'timber', name: 'Timber',     top: 0x8a6a43, side: 0x634c30, build: true },
-  { id: 'thatch', name: 'Thatch',     top: 0xc8a94f, side: 0x957c36, build: true },
-  { id: 'plaster',name: 'Plaster',    top: 0xded3bb, side: 0xa89e8b, build: true },
-  { id: 'cobble', name: 'Cobble',     top: 0x9b9790, side: 0x716e68, build: true },
-  { id: 'rubble', name: 'Rubble',     top: 0x8c8377, side: 0x655e55, build: true },
+  { id: 'stone',  name: 'Stone',      top: 0xa9a294, side: 0x7e786c, build: true,  rough: 0.86, metal: 0.05, bump: 4.2 },
+  { id: 'brick',  name: 'Brick',      top: 0xa8593f, side: 0x7c412d, build: true,  rough: 0.90, metal: 0,    bump: 4.0 },
+  { id: 'marble', name: 'Marble',     top: 0xe6e2d6, side: 0xb9b4a6, build: true,  rough: 0.16, metal: 0.14, bump: 0.7 },
+  { id: 'timber', name: 'Timber',     top: 0x8a6a43, side: 0x634c30, build: true,  rough: 0.82, metal: 0,    bump: 2.4 },
+  { id: 'thatch', name: 'Thatch',     top: 0xc8a94f, side: 0x957c36, build: true,  rough: 0.99, metal: 0,    bump: 3.0 },
+  { id: 'plaster',name: 'Plaster',    top: 0xded3bb, side: 0xa89e8b, build: true,  rough: 0.70, metal: 0,    bump: 1.0 },
+  { id: 'cobble', name: 'Cobble',     top: 0x9b9790, side: 0x716e68, build: true,  rough: 0.88, metal: 0.03, bump: 4.6 },
+  { id: 'rubble', name: 'Rubble',     top: 0x8c8377, side: 0x655e55, build: true,  rough: 0.95, metal: 0,    bump: 4.4 },
 ];
 export const MAT = Object.fromEntries(MATS.map((m, i) => [m.id, i]));
 
@@ -42,7 +47,9 @@ export const TILE_SIDE = MATS.map(m => m.side);
 // How many levels a soldier can step up in one stride. Everything about walls
 // falls out of this number: three levels of stone cannot be climbed, so a gap
 // left at one level is a gate, and a gate is a chokepoint.
-export const CLIMB = 1;
+// Two half-steps, i.e. exactly one block. A slab is therefore always walkable,
+// which is what makes slabs useful as stairs.
+export const CLIMB = 2;
 
 export class Terrain {
   constructor(w = 192, h = 192) {
@@ -73,6 +80,8 @@ export class Terrain {
   }
 
   // world <-> tile. The grid is centred on the origin.
+  get step() { return TILE; }
+  get climbY() { return CLIMB * LEVEL; }
   get halfX() { return this.w * TILE / 2; }
   get halfZ() { return this.h * TILE / 2; }
   tx(x) { return Math.floor((x + this.halfX) / TILE); }
@@ -147,6 +156,9 @@ export class Terrain {
     }
     this.version++;
   }
+
+  // Top surface of the column at a tile, in world Y.
+  topAt(i, j) { return this.levelAt(i, j) * LEVEL; }
 
   // Terrain a unit cannot stand on at all.
   blocked(i, j) {
