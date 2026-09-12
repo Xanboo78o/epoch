@@ -2,8 +2,13 @@
 // height level, and has a type. Units step up and down between levels; there
 // is no smooth ground anywhere.
 
-export const TILE = 80;        // world units across one tile
-export const LEVEL = 26;       // world units per height step
+// A block is a PERFECT CUBE: as wide as it is tall. A soldier is 72 units,
+// which is exactly four blocks — the grid is fine enough to build a house with
+// a door and a window in it.
+export const BLOCK = 18;
+export const TILE = BLOCK;
+export const LEVEL = BLOCK;
+export const CHUNK = 32;       // tiles per chunk edge; meshes rebuild per chunk
 
 // Ground materials you find, then building materials you place. A wall is
 // nothing more than tiles raised a few levels with a build material on them.
@@ -40,11 +45,31 @@ export const TILE_SIDE = MATS.map(m => m.side);
 export const CLIMB = 1;
 
 export class Terrain {
-  constructor(w = 72, h = 72) {
+  constructor(w = 192, h = 192) {
     this.w = w; this.h = h;
     this.level = new Int16Array(w * h);
     this.type = new Uint8Array(w * h);
     this.version = 0;
+    this.cw = Math.ceil(w / CHUNK);
+    this.ch = Math.ceil(h / CHUNK);
+    this.dirty = new Set();          // chunk indices needing a mesh rebuild
+    this.markAllDirty();
+  }
+
+  markAllDirty() {
+    this.dirty.clear();
+    for (let k = 0; k < this.cw * this.ch; k++) this.dirty.add(k);
+  }
+  // A tile edit dirties its own chunk and any neighbour it shares a face with,
+  // because a wall quad belongs to the taller of the two tiles.
+  touch(i, j) {
+    const ci = (i / CHUNK) | 0, cj = (j / CHUNK) | 0;
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        const a = ci + di, b = cj + dj;
+        if (a >= 0 && b >= 0 && a < this.cw && b < this.ch) this.dirty.add(b * this.cw + a);
+      }
+    }
   }
 
   // world <-> tile. The grid is centred on the origin.
@@ -76,11 +101,13 @@ export class Terrain {
     const k = this.idx(i, j);
     if (level !== undefined) this.level[k] = level;
     if (type !== undefined) this.type[k] = type;
+    this.touch(i, j);
     this.version++;
   }
 
   fill(type, level = 0) {
-    this.type.fill(type); this.level.fill(level); this.version++;
+    this.type.fill(type); this.level.fill(level);
+    this.markAllDirty(); this.version++;
   }
 
   // --- hand-authored brushes (map authoring, never noise) ---
@@ -95,6 +122,7 @@ export class Terrain {
         if (level !== undefined) {
           this.level[k] = soft ? Math.round(level * Math.cos(d * Math.PI * 0.5) ** 2) : level;
         }
+        this.touch(i, j);
       }
     }
     this.version++;
@@ -113,6 +141,7 @@ export class Terrain {
           const k = this.idx(i, j);
           if (type !== undefined) this.type[k] = type;
           if (level !== undefined) this.level[k] = level;
+          this.touch(i, j);
         }
       }
     }

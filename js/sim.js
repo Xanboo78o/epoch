@@ -152,7 +152,14 @@ export class Sim {
       const dx = tgt.p.chest.x - p.chest.x, dz = tgt.p.chest.z - p.chest.z;
       dist = Math.hypot(dx, dz) || 1e-3;
       const nx = dx / dist, nz = dz / dist;
-      u.yaw = Math.atan2(nx, nz);
+      // Turn toward him instead of snapping. Retargeting every half second
+      // meant a man could spin 180 degrees between two frames, which read as
+      // the whole army stuttering.
+      const want = Math.atan2(nx, nz);
+      let d2 = want - u.yaw;
+      while (d2 > Math.PI) d2 -= Math.PI * 2;
+      while (d2 < -Math.PI) d2 += Math.PI * 2;
+      u.yaw += Math.max(-6 * dt, Math.min(6 * dt, d2));
       if (spec.keepAway) {
         if (dist < spec.keepAway * 0.8) { wantX = -nx; wantZ = -nz; }
         else if (dist > spec.reach * 0.85) { wantX = nx; wantZ = nz; }

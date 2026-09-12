@@ -1,9 +1,17 @@
 # EPOCH (working name — rename it)
 
-Minecraft, if it were a wargame. The world is a **tile grid**: you build the
-castle, the city walls and the farm out of blocks, each district with its own
-ground and its own building material, then you put two armies on it and press
-GO.
+Minecraft, if it were a wargame. The world is a grid of **perfect cube blocks**
+— a soldier is exactly four blocks tall — and you build the city walls, the
+houses and the farm out of them, each district with its own ground and its own
+building material. Then you put two armies on it and press GO.
+
+The map is 192x192 blocks and its mesh is **chunked** (32x32): painting a block
+rebuilds the nine chunks around it, not the whole world.
+
+One thing the format cannot do: a heightmap gives every tile exactly one
+height, so there are no overhangs and no holes — no windows, no doorway
+lintels, no roof over a hollow room. Houses with roofs are solid; `compound()`
+leaves a walled yard open so troops can actually hold it.
 
 Everything about walls falls out of one number — a soldier can climb **one**
 level. Three levels of stone cannot be climbed, so a one-level gap is a gate,

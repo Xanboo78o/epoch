@@ -16,7 +16,6 @@ export class FlowField {
     this.t = terrain;
     this.n = terrain.w * terrain.h;
     this.cost = new Float32Array(this.n);
-    this.queue = new Int32Array(this.n);
     this.ready = false;
   }
 
@@ -24,20 +23,24 @@ export class FlowField {
   build(goals) {
     const t = this.t, W = t.w, H = t.h;
     this.cost.fill(Infinity);
-    let head = 0, tail = 0;
-    const q = this.queue;
+    // A plain growable array, not a fixed Int32Array(n): this is Dijkstra with
+    // re-push-on-improvement, so the queue legitimately holds more entries than
+    // there are cells, and the old fixed buffer silently overflowed and left
+    // the whole field unbuilt once the map grew to 37k tiles.
+    let head = 0;
+    const q = [];
     for (const [gi, gj] of goals) {
       if (!t.inside(gi, gj) || t.blocked(gi, gj)) continue;
       const k = gj * W + gi;
       if (this.cost[k] === 0) continue;
       this.cost[k] = 0;
-      q[tail++] = k;
+      q.push(k);
     }
-    if (tail === 0) { this.ready = false; return; }
+    if (q.length === 0) { this.ready = false; return; }
 
     // Uniform-cost sweep. Diagonals cost more, so a plain FIFO would be wrong;
     // re-pushing on improvement keeps it correct and is fast enough at 5k cells.
-    while (head < tail) {
+    while (head < q.length) {
       const k = q[head++];
       const i = k % W, j = (k / W) | 0;
       const base = this.cost[k];
@@ -50,8 +53,7 @@ export class FlowField {
         const nk = nj * W + ni;
         if (base + step < this.cost[nk] - 1e-4) {
           this.cost[nk] = base + step;
-          if (tail >= q.length) { head = 0; break; }   // safety, never hit in practice
-          q[tail++] = nk;
+          q.push(nk);
         }
       }
     }

@@ -2,7 +2,7 @@
 // rotates; you pan and you zoom, that is all.
 
 import * as THREE from './vendor/three.module.min.js';
-import { TILE, LEVEL, TILE_COLOUR, TILE_SIDE, MATS } from './terrain.js';
+import { TILE, LEVEL, TILE_COLOUR, TILE_SIDE, MATS, CHUNK } from './terrain.js';
 
 export const PITCH = 60 * Math.PI / 180;   // locked. Do not add yaw controls.
 export const TEAM = [
@@ -62,8 +62,9 @@ export class Renderer {
     const shotGeo = new THREE.CylinderGeometry(0.6, 0.6, 1, 4, 1);
     this.shots = this.makeInstanced(shotGeo, 900, 0.5, 0.05);
 
-    this.terrainMesh = null;
-    this.terrainV = -1;
+    this.chunks = new Map();
+    this.terrainMat = null;
+    this.propsV = -1;
   }
 
   makeInstanced(geo, count, rough, metal) {
@@ -115,10 +116,20 @@ export class Renderer {
   // The map is built as real tiles: a flat top quad per tile, plus a vertical
   // wall wherever a neighbour sits lower. No smooth ground anywhere — the
   // steps between levels are the whole look.
+  // Only the chunks the player actually edited get rebuilt. At 37k tiles,
+  // regenerating the whole map on every painted block made building unusable.
   buildTerrain(terrain) {
-    if (this.terrainV === terrain.version && this.terrainMesh) return;
-    this.terrainV = terrain.version;
-    const W = terrain.w, H = terrain.h;
+    if (!terrain.dirty || terrain.dirty.size === 0) return;
+    if (!this.chunks) this.chunks = new Map();
+    for (const ck of terrain.dirty) this.buildChunk(terrain, ck);
+    terrain.dirty.clear();
+  }
+
+  buildChunk(terrain, ck) {
+    const CH = CHUNK;
+    const ci = ck % terrain.cw, cj = (ck / terrain.cw) | 0;
+    const i0 = ci * CH, j0 = cj * CH;
+    const i1 = Math.min(terrain.w, i0 + CH), j1 = Math.min(terrain.h, j0 + CH);
     const pos = [], col = [], nrm = [];
     const c = new THREE.Color(), cw = new THREE.Color();
     const half = TILE / 2;
@@ -129,8 +140,8 @@ export class Renderer {
       for (let k = 0; k < 6; k++) { nrm.push(nx, ny, nz); col.push(colr.r, colr.g, colr.b); }
     };
 
-    for (let j = 0; j < H; j++) {
-      for (let i = 0; i < W; i++) {
+    for (let j = j0; j < j1; j++) {
+      for (let i = i0; i < i1; i++) {
         const lv = terrain.levelAt(i, j);
         const ty = terrain.typeAt(i, j);
         let y = lv * LEVEL;
@@ -165,18 +176,22 @@ export class Renderer {
       }
     }
 
-    if (this.terrainMesh) {
-      this.terrainMesh.geometry.dispose();
-      this.scene.remove(this.terrainMesh);
-    }
+    let m = this.chunks.get(ck);
+    if (m) { m.geometry.dispose(); this.scene.remove(m); }
+    if (!pos.length) { this.chunks.delete(ck); return; }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
-    this.terrainMesh = new THREE.Mesh(geo, mat);
-    this.terrainMesh.receiveShadow = true;
-    this.scene.add(this.terrainMesh);
+    geo.computeBoundingSphere();
+    if (!this.terrainMat) {
+      this.terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    }
+    m = new THREE.Mesh(geo, this.terrainMat);
+    m.receiveShadow = true;
+    m.castShadow = true;
+    this.scene.add(m);
+    this.chunks.set(ck, m);
   }
 
   // Scenery that belongs to the map rather than the battle: a tree on every
